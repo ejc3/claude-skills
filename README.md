@@ -19,6 +19,33 @@ ln -s ~/claude-skills/pr-diligence ~/.claude/skills/pr-diligence
 
 Claude Code picks up skills in `~/.claude/skills` at the start of a session.
 
+## pr-diligence: an example
+
+[tmux/tmux#5722](https://github.com/tmux/tmux/pull/5722) fixes a server crash:
+a menu stays open after the pane it was opened for is gone, and the next
+redraw reads the freed pane. It was prepared with this skill:
+
+- **The pull request**: two commits, a 29-line regression test and then a
+  10-line fix that reuses a check tmux already applies elsewhere. The text
+  leads with what goes wrong, gives a one-line reproducer, and states what was
+  tested and what was not.
+- **The walkthrough**:
+  [a public page](https://claude.ai/artifact/EQfdpWANP4vkDLXb5fTMHJ), linked
+  from the pull request. It covers the crash with its sanitizer report, the code
+  path to the freed pointer, the diff with numbered notes, why the new check
+  is safe on freed pointers, the test explained by line number, the evidence,
+  and the pull request text.
+- **Behind it**: the test was run five times each against master and the fix,
+  in plain and AddressSanitizer builds, plus the full regress suite. Five
+  reviewers worked in parallel on a frozen packet, then two closure passes
+  checked the repairs. A private-value scan ran before the push.
+
+The same batch also produced
+[#5723](https://github.com/tmux/tmux/pull/5723),
+[#5724](https://github.com/tmux/tmux/pull/5724) and
+[#5725](https://github.com/tmux/tmux/pull/5725), each with its own
+walkthrough linked from the pull request.
+
 ## pr-diligence: the walkthrough helper
 
 `pr-diligence/scripts/walkthrough.py` builds a walkthrough page from git, so
