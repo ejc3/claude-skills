@@ -573,7 +573,7 @@ export function auditSvg(
   // ---- non-text marks: series lines, arrows and edges, dots (filled or hollow), solid
   // bars, and small stroke-only tiles. Exempt: rects that frame text (a container or
   // a heat-table cell: some rendered text's anchor lies inside it; the text is
-  // measured against it instead), stripes ≤3px, hairlines drawn in the grid colour
+  // measured against it instead), labeled swatches (a legend key), stripes ≤3px, hairlines drawn in the grid colour
   // (gridlines and rules are decoration; the axis labels carry the values), and a
   // fill that composites to the page colour (a hollow dot's centre). A translucent
   // colour (rgba, fill/stroke-opacity, an ancestor's opacity) is composited over the
@@ -586,7 +586,7 @@ export function auditSvg(
     const y = attrUp(run, "y") + dy;
     if (!Number.isFinite(x) || !Number.isFinite(y)) continue;
     const size = fontPx(computed(run.el, "font-size", "light", ctx));
-    anchors.push([x, y - (Number.isFinite(size) ? size : 0) * 0.35]);
+    anchors.push([x, y - (Number.isFinite(size) ? size : 0) * 0.35, y]);
   }
   const framesText = (e) => {
     const g = geom(e);
@@ -594,11 +594,25 @@ export function auditSvg(
       ([x, y]) => x > g.x && x < g.x + g.w && y > g.y && y < g.y + g.h,
     );
   };
+  // a labeled swatch (a legend key): a rect no larger than 32x20 with a rendered text
+  // starting within 12px of its right edge, the baseline within 4px of its vertical
+  // extent. The adjacent text carries what the graphic shows (WCAG 1.4.11).
+  const isLabeledSwatch = (e) => {
+    const g = geom(e);
+    if (g.w > 32 || g.h > 20) return false;
+    return anchors.some(
+      ([x, , base]) =>
+        x >= g.x + g.w &&
+        x <= g.x + g.w + 12 &&
+        base >= g.y - 4 &&
+        base <= g.y + g.h + 4,
+    );
+  };
   const checkMark = (e, attr) => {
     if (e.tag === "rect") {
       const { w, h } = geom(e);
       if (!(w > 3 && h > 3)) return;
-      if (framesText(e)) return;
+      if (framesText(e) || isLabeledSwatch(e)) return;
     }
     if (attr === "stroke" && HAIRLINES.has(e.tag)) {
       const c = paint(e, "stroke", "light", ctx).color;

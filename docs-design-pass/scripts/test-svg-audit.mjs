@@ -553,6 +553,45 @@ test("F8 text elsewhere does not exempt a rect", () => {
   );
 });
 
+test("F8 a labeled swatch (20x12 tinted rect, label 5px right) is exempt", () => {
+  assert.deepEqual(
+    marks(
+      `<rect x="20" y="40" width="20" height="12" fill="rgba(31,138,77,0.16)"/>` +
+        text("fastest", `fill="#1c2330"`, 45, 50),
+    ),
+    [],
+  );
+});
+test("F8 the same swatch with its label 40px away is flagged", () => {
+  has(
+    marks(
+      `<rect x="20" y="40" width="20" height="12" fill="rgba(31,138,77,0.16)"/>` +
+        text("fastest", `fill="#1c2330"`, 80, 50),
+    ),
+    /^light: rect fill rgba\(31,138,77,0\.16\)/,
+  );
+});
+test("F8 a swatch label on a different line, or left of the rect, does not exempt it", () => {
+  const rect = `<rect x="20" y="40" width="20" height="12" fill="rgba(31,138,77,0.16)"/>`;
+  has(
+    marks(rect + text("below", `fill="#1c2330"`, 45, 80)),
+    /^light: rect fill/,
+  );
+  has(
+    marks(rect + text("left", `fill="#1c2330"`, 10, 50)),
+    /^light: rect fill/,
+  );
+});
+test("F8 a 60x40 rect with a label beside it is too large to be a swatch", () => {
+  has(
+    marks(
+      `<rect x="20" y="30" width="60" height="40" fill="rgba(31,138,77,0.16)"/>` +
+        text("fastest", `fill="#1c2330"`, 85, 50),
+    ),
+    /^light: rect fill rgba\(31,138,77,0\.16\)/,
+  );
+});
+
 // ---- finding 7: SVG's initial values (an unset fill is black) --------------------------------------
 
 test("F7 a rect with no fill is a black box: text over it is measured against black", () => {
