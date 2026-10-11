@@ -1,0 +1,114 @@
+<!--
+  Skeleton for a pull request walkthrough. Keys in @@...@@ are filled by
+  walkthrough.build(). Prose in [brackets] is for you to replace. Keep the
+  sections that apply; their order is the order a reviewer needs.
+-->
+<nav class="status" aria-label="Sections">
+  <div class="wins">
+    <a href="#bug">0:bug</a>
+    <a href="#cause">1:cause</a>
+    <a href="#change">2:change*</a>
+    <a href="#safe">3:why-safe</a>
+    <a href="#test">4:test</a>
+    <a href="#evidence">5:evidence</a>
+    <a href="#prtext">6:pr-text</a>
+  </div>
+  <div class="right">@@BRANCH@@ @@HEAD@@</div>
+</nav>
+
+<main class="wrap">
+<header class="top">
+  <h1>@@PRTITLE@@</h1>
+  <p class="lede">[One paragraph: what goes wrong, in the reader's terms, and how big the change is.]</p>
+  <ul class="facts">
+    <li class="state">@@PRSTATE@@</li>
+    <li>@@BRANCH@@ @@HEAD@@</li>
+    <li>on @@BASENAME@@ @@BASE@@</li>
+    <li>[N] commits: test, then fix</li>
+    <li>[file +N −M]</li>
+  </ul>
+</header>
+
+<section id="bug">
+  <h2><span class="step">0</span>What goes wrong</h2>
+  <ol class="timeline">
+    <li><b>[First step, as the user or program does it.]</b> [Detail.]</li>
+    <li class="bad"><b>[The step where it goes wrong.]</b> [Detail.]</li>
+  </ol>
+  <p>[A copy-paste reproducer, if one exists.]</p>
+  @@REPORT@@
+  <p>[What happens in an ordinary build, said plainly, including when it does not show.]</p>
+</section>
+
+<section id="cause">
+  <h2><span class="step">1</span>[Where the bad value comes from]</h2>
+  <p>[Walk the path in the code's own order, one excerpt per step, each generated from the base revision with the relevant lines highlighted.]</p>
+  @@CAUSE@@
+</section>
+
+<section id="change">
+  <h2><span class="step">2</span>The change</h2>
+  @@DIFF@@
+  <ul class="notes">
+    <li><span class="callout">1</span><span>[What this line does and why it is enough.]</span></li>
+  </ul>
+  <h3>What does not change</h3>
+  <ul>
+    <li>[Every behaviour a reviewer might worry about, and why it is unchanged.]</li>
+  </ul>
+  <h3>[The same pattern already in the codebase]</h3>
+  @@PRECEDENT@@
+</section>
+
+<section id="safe">
+  <h2><span class="step">3</span>[Why the new check is safe]</h2>
+  <p>[Only when the fix relies on something non-obvious, e.g. a check that must not itself touch freed memory.]</p>
+  @@SAFE@@
+</section>
+
+<section id="test">
+  <h2><span class="step">4</span>The test</h2>
+  @@TEST@@
+  <ul>
+    <li>[Lines a–b: what they do. Cite line numbers from the rendered block.]</li>
+  </ul>
+</section>
+
+<section id="evidence">
+  <h2><span class="step">5</span>Evidence</h2>
+  <div class="table-wrap">
+  <table>
+    <thead><tr><th>Run</th><th>@@BASENAME@@ @@BASE@@</th><th>with the fix</th></tr></thead>
+    <tbody>
+      <tr><td>[New test, sanitizer build, N runs]</td><td><span class="pill fail">[N / N fail]</span> [why]</td><td><span class="pill pass">[N / N pass]</span></td></tr>
+      <tr><td>[Full suite, both builds]</td><td class="small" colspan="2">[Failures and whether they also fail on the base.]</td></tr>
+    </tbody>
+  </table>
+  </div>
+  <p class="small">[OS, architecture, compiler, library versions. Platforms not run.]</p>
+</section>
+
+<section id="prtext">
+  <h2><span class="step">6</span>The pull request text</h2>
+  <p>The text of the pull request, as GitHub shows it.</p>
+  <article class="pr">
+    <div class="prhead">
+      <div class="t">@@PRTITLE@@</div>
+      <div class="m">@@PRLINK@@</div>
+    </div>
+    <div class="prbody">@@PRBODY@@</div>
+  </article>
+  <details>
+    <summary>Show the raw Markdown</summary>
+    <pre>@@PRRAW@@</pre>
+  </details>
+  <h3>The commit messages</h3>
+  @@COMMITS@@
+  <h3>Design questions</h3>
+  <dl class="qa">
+    <dt>[A question the maintainer is likely to ask.]</dt>
+    <dd>[A short, factual answer.]</dd>
+  </dl>
+</section>
+<footer class="small" style="border-top:1px solid var(--rule);margin-top:36px;padding-top:16px">Written with Claude's assistance. The code shown is generated from the branch.</footer>
+</main>
