@@ -119,7 +119,9 @@ its markers fails the generator.
    - `/code-review` on the diff.
    - `codex exec -s read-only` with the PR's contract and an explicit list of
      what to hunt (dropped or changed values vs the old SVG, weakened
-     assertions, caveats lost, unbacked claims, CI gate gaps).
+     assertions, caveats lost, unbacked claims, CI gate gaps). Run it in the
+     background with stdin closed (`codex exec ... </dev/null > log 2>&1`);
+     without `</dev/null` it can wait on stdin indefinitely.
    - A **visual and data-fidelity reviewer** agent that rasterizes old and new
      in light, dark and phone width, lists every number in old and new SVGs,
      checks each block against its SVG, and judges the design as an editor of a
