@@ -8,6 +8,7 @@ templates it uses.
 |---|---|
 | [`pr-diligence`](pr-diligence/SKILL.md) | Preparing a pull request someone else will judge, such as a fix sent upstream: a red/green regression test in the builds the project's CI uses, a fix no bigger than the defect, parallel independent review of a frozen packet, a private-value scan, plain PR text, and a public walkthrough page of the code generated from git. |
 | [`vercel-to-cloudflare`](vercel-to-cloudflare/SKILL.md) | Moving a Next.js site from Vercel to Cloudflare Workers, or running it on both during the move: a Vercel-to-Cloudflare feature map with the gotchas that break only on Workers, a staged strategy from a protected staging Worker to a domain cutover with one-step rollback, pre- and post-cutover checklists, and how to run several conversions at once. |
+| [`docs-design-pass`](docs-design-pass/SKILL.md) | Raising a repository's charts, figures and prose to the standard of a well-made technical paper without changing a measured value: design counsel first, a shared style kit, stacked PRs, a phone-readable text alternative for every rasterized chart, prose cut to one statement per finding, parallel independent review with red tests for every accepted defect, and a merge gate on bot reviews and adjudicated findings. |
 
 ## Install
 
@@ -17,6 +18,7 @@ Clone the repository and link the skills you want into `~/.claude/skills`:
 git clone https://github.com/ejc3/claude-skills ~/claude-skills
 ln -s ~/claude-skills/pr-diligence ~/.claude/skills/pr-diligence
 ln -s ~/claude-skills/vercel-to-cloudflare ~/.claude/skills/vercel-to-cloudflare
+ln -s ~/claude-skills/docs-design-pass ~/.claude/skills/docs-design-pass
 ```
 
 Claude Code picks up skills in `~/.claude/skills` at the start of a session.
