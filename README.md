@@ -19,6 +19,14 @@ ln -s ~/claude-skills/pr-diligence ~/.claude/skills/pr-diligence
 
 Claude Code picks up skills in `~/.claude/skills` at the start of a session.
 
+## Contributing
+
+Changes land by pull request. Each PR description must carry one
+`Code-Review:` and one `Simplify:` decision line (`ran`, or `skipped — <reason>`);
+the `review decision` check fails without them. Review threads are answered as
+the `pr-review-gate` skill in `.claude/skills/` describes. See
+[`AGENTS.md`](AGENTS.md).
+
 ## pr-diligence: an example
 
 [tmux/tmux#5722](https://github.com/tmux/tmux/pull/5722) fixes a server crash:
