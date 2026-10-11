@@ -473,14 +473,98 @@ test("F6 a solid bar is checked and a thin stripe is not", () => {
   );
 });
 
+// ---- finding 8: translucent marks, and which rects frame text ---------------------------------------
+
+test("F8 a translucent near-white bar on white is flagged", () => {
+  has(
+    marks(
+      `<rect x="5" y="30" width="40" height="20" fill="rgba(0,0,0,0.04)"/>`,
+    ),
+    /^light: rect fill rgba\(0,0,0,0\.04\) \(4% opaque\) at 1\.\d+:1/,
+  );
+  has(
+    marks(
+      `<rect x="5" y="30" width="40" height="20" fill="#dddddd" fill-opacity="0.5"/>`,
+    ),
+    /^light: rect fill #dddddd \(50% opaque\)/,
+  );
+});
+test("F8 a stroke-opacity 0.5 pale series line is flagged", () => {
+  has(
+    marks(
+      `<line x1="0" y1="50" x2="100" y2="50" stroke="#aaaaaa" stroke-opacity="0.5"/>`,
+    ),
+    /^light: line stroke #aaaaaa \(50% opaque\) at/,
+  );
+});
+test("F8 a line inside a group with opacity 0.3 is flagged", () => {
+  has(
+    marks(
+      `<g opacity="0.3"><line x1="0" y1="50" x2="100" y2="50" stroke="#555555"/></g>`,
+    ),
+    /^light: line stroke #555555 \(30% opaque\) at/,
+  );
+});
+test("F8 a translucent mark that still reaches 3:1 passes", () => {
+  assert.deepEqual(
+    marks(
+      `<line x1="0" y1="50" x2="100" y2="50" stroke="#000000" stroke-opacity="0.8"/>`,
+      undefined,
+      { style: "" },
+    ),
+    [],
+  );
+});
+test("F8 a translucent mark is composited over each theme's own page", () => {
+  const style = `@media (prefers-color-scheme: dark){rect[fill="#ffffff"]{fill:#0d1117}}`;
+  const out = marks(
+    `<line x1="0" y1="50" x2="100" y2="50" stroke="#cccccc" stroke-opacity="0.5"/>`,
+    undefined,
+    { style },
+  );
+  has(out, /^light: line stroke #cccccc \(50% opaque\)/);
+  assert.ok(!out.some((i) => /^dark:/.test(i)), JSON.stringify(out));
+});
+test("F8 a bordered 200x20 bar with no text inside is flagged on fill and stroke", () => {
+  const out = marks(
+    `<rect x="0" y="40" width="200" height="20" fill="#dddddd" stroke="#dddddd"/>`,
+  );
+  has(out, /^light: rect fill #dddddd at/);
+  has(out, /^light: rect stroke #dddddd at/);
+});
+test("F8 a tinted rect with text inside stays exempt, translucent or not", () => {
+  assert.deepEqual(
+    marks(
+      `<rect x="5" y="5" width="60" height="30" fill="rgba(31,138,77,0.16)"/>` +
+        text("1.2s", `fill="#1c2330"`, 10, 25) +
+        `<rect x="80" y="5" width="60" height="30" fill="#f4f6f8" stroke="#e8ecef"/>` +
+        text("3.4s", `fill="#000000"`, 85, 25),
+    ),
+    [],
+  );
+});
+test("F8 text elsewhere does not exempt a rect", () => {
+  has(
+    marks(
+      `<rect x="5" y="30" width="40" height="20" fill="#dddddd" stroke="#dddddd"/>` +
+        text("far", `fill="#1c2330"`, 120, 80),
+    ),
+    /^light: rect fill #dddddd/,
+  );
+});
+
 // ---- finding 7: SVG's initial values (an unset fill is black) --------------------------------------
 
 test("F7 a rect with no fill is a black box: text over it is measured against black", () => {
   const body = `<rect x="5" y="5" width="100" height="40"/>${text("on black", `fill="#1c2330"`, 10, 30)}`;
   has(issuesOf(svg({ body })), /^light: "on black" #1c2330 at/);
 });
-test("F7 light text on a rect with no fill passes; the black bar itself fails on the dark page", () => {
+test("F7 light text on a rect with no fill passes; the rect frames the text, so it is not a mark", () => {
   const body = `<rect x="5" y="5" width="100" height="40"/>${text("on black", `fill="#ffffff"`, 10, 30)}`;
+  assert.deepEqual(issuesOf(svg({ body })), []);
+});
+test("F7 a rect with no fill and no text inside is a black bar: it fails on the dark page", () => {
+  const body = `<rect x="5" y="5" width="100" height="40"/>`;
   assert.deepEqual(issuesOf(svg({ body })), [
     "dark: rect fill black at 1.11:1 (marks need 3:1)",
   ]);

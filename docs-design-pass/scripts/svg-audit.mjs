@@ -571,21 +571,34 @@ export function auditSvg(
   }
 
   // ---- non-text marks: series lines, arrows and edges, dots (filled or hollow), solid
-  // bars, and small stroke-only tiles. Exempt: boxes that frame text (a container
-  // border), stripes ≤3px, hairlines drawn in the grid colour (gridlines and rules
-  // are decoration; the axis labels carry the values), and a page-coloured fill
-  // (a hollow dot's centre).
+  // bars, and small stroke-only tiles. Exempt: rects that frame text (a container or
+  // a heat-table cell: some rendered text's anchor lies inside it; the text is
+  // measured against it instead), stripes ≤3px, hairlines drawn in the grid colour
+  // (gridlines and rules are decoration; the axis labels carry the values), and a
+  // fill that composites to the page colour (a hollow dot's centre). A translucent
+  // colour (rgba, fill/stroke-opacity, an ancestor's opacity) is composited over the
+  // theme's page colour before the 3:1 check.
+  const anchors = [];
+  for (const run of runs) {
+    if (isNone(paint(run.el, "fill", "light", ctx).raw)) continue;
+    const [dx, dy] = offset(run.el, notes);
+    const x = attrUp(run, "x") + dx;
+    const y = attrUp(run, "y") + dy;
+    if (!Number.isFinite(x) || !Number.isFinite(y)) continue;
+    const size = fontPx(computed(run.el, "font-size", "light", ctx));
+    anchors.push([x, y - (Number.isFinite(size) ? size : 0) * 0.35]);
+  }
+  const framesText = (e) => {
+    const g = geom(e);
+    return anchors.some(
+      ([x, y]) => x > g.x && x < g.x + g.w && y > g.y && y < g.y + g.h,
+    );
+  };
   const checkMark = (e, attr) => {
     if (e.tag === "rect") {
       const { w, h } = geom(e);
       if (!(w > 3 && h > 3)) return;
-      // a box that frames text: no mark for a border over 24px, or for a bordered fill
-      if (
-        attr === "stroke"
-          ? w > 24 || h > 24
-          : !isNone(paint(e, "stroke", "light", ctx).raw)
-      )
-        return;
+      if (framesText(e)) return;
     }
     if (attr === "stroke" && HAIRLINES.has(e.tag)) {
       const c = paint(e, "stroke", "light", ctx).color;
@@ -600,13 +613,15 @@ export function auditSvg(
         );
         continue;
       }
-      if (p.color.a < 1) continue;
-      const c = contrast(p.color.rgb, page[theme]);
+      const c = contrast(over(p.color, page[theme]), page[theme]);
       if (c === 1) continue;
-      if (c < 3)
+      if (c < 3) {
+        const alpha =
+          p.color.a < 1 ? ` (${Math.round(p.color.a * 100)}% opaque)` : "";
         out.push(
-          `${theme}: ${e.tag} ${attr} ${p.raw} at ${c.toFixed(2)}:1 (marks need 3:1)`,
+          `${theme}: ${e.tag} ${attr} ${p.raw}${alpha} at ${c.toFixed(2)}:1 (marks need 3:1)`,
         );
+      }
     }
   };
   for (const e of shapes)

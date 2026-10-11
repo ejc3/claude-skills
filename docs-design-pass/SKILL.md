@@ -88,7 +88,12 @@ collapsed `<details>`, between markers:
 ```markdown
 ![...](bench/charts/name.svg)
 <!-- chart-data:name -->
+<details>
+<summary>The chart's numbers as tables</summary>
+
 ...generated: the chart's context line (versions, machine), then tables...
+
+</details>
 <!-- /chart-data:name -->
 ```
 
