@@ -144,6 +144,63 @@ test("F7 a space-separated unit change is listed as removed and added", () => {
   assert.match(r.stdout, /removed .*247MB/);
 });
 
+// ---- the unit rule: an unlisted unit is still part of the number -----------------------------------------------
+
+for (const [a, b, added] of [
+  ["4 GHz", "4 MHz", "4MHz"],
+  ["20 °C", "20 °F", "20°F"],
+  ["20°C", "20°F", "20°C|20°F"],
+  ["3.2 kHz", "3.2 MHz", "3.2MHz"],
+  ["100 req/s", "100 req/min", "100req/min"],
+  ["90 MB/s", "90 GB/s", "90GB/s"],
+  ["5 files", "5 lines", "5line"],
+  ["12 apps", "12 libs", "12lib"],
+  ["64 cores", "64 threads", "64thread"],
+  ["5 days", "5 hours", "5hour"],
+  ["8 CPUs", "8 GPUs", "8GPUs"],
+  ["2 Hz", "2 kHz", "2kHz"],
+]) {
+  test(`unit "${a}" -> "${b}" is an added number`, () => {
+    const r = edit(`it ran ${a} here\n`, `it ran ${b} here\n`);
+    assert.equal(r.status, 1, r.stdout + r.stderr);
+    assert.match(r.stdout, new RegExp(`ADDED .*(${added})`));
+  });
+}
+for (const [a, b] of [
+  ["3 sources", "3 sources"],
+  ["247 MB", "247MB"],
+  ["247MB", "247 MB"],
+  ["4 GHz", "4GHz"],
+  ["20 °C", "20 °C"],
+  ["64 cores", "64-core box"],
+  ["64 cores", "64 core"],
+  ["1 file", "1 files"],
+  ["5 days", "5-day"],
+  ["10 to 20 cores", "10 to 20 cores, reworded"],
+  ["5 or 6 of them", "5 or 6 of those"],
+  ["3 sources", "3 findings"],
+  ["see 4 More", "see 4 Other"],
+]) {
+  test(`unit "${a}" and "${b}" read as the same number`, () => {
+    const r = edit(`it ran ${a} here\n`, `it ran ${b} here\n`);
+    assert.equal(r.status, 0, r.stdout + r.stderr);
+  });
+}
+test("a slash after a unit is a separator: 4.5s/2.2s = 4.5s / 2.2s, 90 MB/s = 90MB/s", () => {
+  assert.equal(edit("yarn 4.5s / 2.2s\n", "yarn 4.5s/2.2s\n").status, 0);
+  assert.equal(edit("yarn 4.5s/2.2s\n", "yarn 4.5ms/2.2s\n").status, 1);
+  assert.equal(edit("at 90 MB/s\n", "at 90MB/s\n").status, 0);
+});
+test("a hyphen attaches only a count noun (10-20 and 5-minute)", () => {
+  assert.equal(edit("10-20 times\n", "10 and 20 times\n").status, 0);
+  assert.equal(edit("a 5 minute wait\n", "a 5-minute wait\n").status, 0);
+  assert.equal(edit("a 5-fold gain\n", "a 5 gain\n").status, 0);
+});
+test("a spaced symbol alone is not a unit (10 / 20, 5 x 3)", () => {
+  assert.equal(edit("10 / 20\n", "10/20\n").status, 0);
+  assert.equal(edit("5 x 3\n", "5 x 3\n").status, 0);
+});
+
 // ---- finding 8: only a missing path means a new file -------------------------------------------------------------
 
 test("F8 a bad base ref exits 2 with git's error, not 'every number is new'", () => {
@@ -205,7 +262,7 @@ test("F8 an absolute path works from any directory", () => {
 // ---- number tokens ----------------------------------------------------------------------------------------------
 
 test("a range reads as two numbers, not a number and a negative (10-20)", () => {
-  const r = edit("took 20 and 10 cores\n", "took 10-20 cores\n");
+  const r = edit("took 20 and 10 times\n", "took 10-20 times\n");
   assert.equal(r.status, 0, r.stdout + r.stderr);
   assert.match(r.stdout, /unchanged numbers/);
 });

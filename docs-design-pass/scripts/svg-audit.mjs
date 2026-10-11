@@ -20,7 +20,13 @@
 // <tspan> runs are audited on their own; translate() transforms offset the geometry.
 // A stylesheet rule the audit cannot interpret (class or bare-tag selector,
 // a rule outside the dark block, another @media) is reported as an issue, never dropped.
-// Not modelled: rotate/scale/matrix transforms, <use>, gradients (reported as notes).
+// Colours read: #rgb[a], #rrggbb[aa], the 148 CSS named colours, rgb()/rgba()/hsl()/hsla()
+// (comma or space separated, `/` alpha, % channels, hue units). A fill or stroke on a
+// text or mark that is none of these (a gradient `url(#g)`, `var(...)`, `color(...)`, `lab()`)
+// is reported as an issue, never skipped: the audit cannot vouch for what it cannot read.
+// Overlapping dark rules resolve by specificity (attribute conditions (0,1,0) each, a tag
+// name (0,0,1)), source order breaking ties. `!important` is not modelled.
+// Not modelled: rotate/scale/matrix transforms, <use> (reported as notes).
 //
 // auditSvg returns the issue strings; `.notes` on the returned array lists the
 // assumptions made (for example the page colour used when the SVG draws no background).
@@ -82,13 +88,130 @@ const lum = ([r, g, b]) => {
 const contrast = (a, b) =>
   (Math.max(lum(a), lum(b)) + 0.05) / (Math.min(lum(a), lum(b)) + 0.05);
 
-// colour string → { rgb, a } (null for none / unparsable)
+// the 148 CSS named colours (CSS Color 4), name:rrggbb
+const NAMED = Object.fromEntries(
+  `
+    148
+    aliceblue:f0f8ff, antiquewhite:faebd7, aqua:00ffff, aquamarine:7fffd4,
+    azure:f0ffff, beige:f5f5dc, bisque:ffe4c4, black:000000,
+    blanchedalmond:ffebcd, blue:0000ff, blueviolet:8a2be2, brown:a52a2a,
+    burlywood:deb887, cadetblue:5f9ea0, chartreuse:7fff00, chocolate:d2691e,
+    coral:ff7f50, cornflowerblue:6495ed, cornsilk:fff8dc, crimson:dc143c,
+    cyan:00ffff, darkblue:00008b, darkcyan:008b8b, darkgoldenrod:b8860b,
+    darkgray:a9a9a9, darkgreen:006400, darkgrey:a9a9a9, darkkhaki:bdb76b,
+    darkmagenta:8b008b, darkolivegreen:556b2f, darkorange:ff8c00,
+    darkorchid:9932cc, darkred:8b0000, darksalmon:e9967a, darkseagreen:8fbc8f,
+    darkslateblue:483d8b, darkslategray:2f4f4f, darkslategrey:2f4f4f,
+    darkturquoise:00ced1, darkviolet:9400d3, deeppink:ff1493,
+    deepskyblue:00bfff, dimgray:696969, dimgrey:696969, dodgerblue:1e90ff,
+    firebrick:b22222, floralwhite:fffaf0, forestgreen:228b22, fuchsia:ff00ff,
+    gainsboro:dcdcdc, ghostwhite:f8f8ff, gold:ffd700, goldenrod:daa520,
+    gray:808080, green:008000, greenyellow:adff2f, grey:808080, honeydew:f0fff0,
+    hotpink:ff69b4, indianred:cd5c5c, indigo:4b0082, ivory:fffff0, khaki:f0e68c,
+    lavender:e6e6fa, lavenderblush:fff0f5, lawngreen:7cfc00,
+    lemonchiffon:fffacd, lightblue:add8e6, lightcoral:f08080, lightcyan:e0ffff,
+    lightgoldenrodyellow:fafad2, lightgray:d3d3d3, lightgreen:90ee90,
+    lightgrey:d3d3d3, lightpink:ffb6c1, lightsalmon:ffa07a,
+    lightseagreen:20b2aa, lightskyblue:87cefa, lightslategray:778899,
+    lightslategrey:778899, lightsteelblue:b0c4de, lightyellow:ffffe0,
+    lime:00ff00, limegreen:32cd32, linen:faf0e6, magenta:ff00ff, maroon:800000,
+    mediumaquamarine:66cdaa, mediumblue:0000cd, mediumorchid:ba55d3,
+    mediumpurple:9370db, mediumseagreen:3cb371, mediumslateblue:7b68ee,
+    mediumspringgreen:00fa9a, mediumturquoise:48d1cc, mediumvioletred:c71585,
+    midnightblue:191970, mintcream:f5fffa, mistyrose:ffe4e1, moccasin:ffe4b5,
+    navajowhite:ffdead, navy:000080, oldlace:fdf5e6, olive:808000,
+    olivedrab:6b8e23, orange:ffa500, orangered:ff4500, orchid:da70d6,
+    palegoldenrod:eee8aa, palegreen:98fb98, paleturquoise:afeeee,
+    palevioletred:db7093, papayawhip:ffefd5, peachpuff:ffdab9, peru:cd853f,
+    pink:ffc0cb, plum:dda0dd, powderblue:b0e0e6, purple:800080,
+    rebeccapurple:663399, red:ff0000, rosybrown:bc8f8f, royalblue:4169e1,
+    saddlebrown:8b4513, salmon:fa8072, sandybrown:f4a460, seagreen:2e8b57,
+    seashell:fff5ee, sienna:a0522d, silver:c0c0c0, skyblue:87ceeb,
+    slateblue:6a5acd, slategray:708090, slategrey:708090, snow:fffafa,
+    springgreen:00ff7f, steelblue:4682b4, tan:d2b48c, teal:008080,
+    thistle:d8bfd8, tomato:ff6347, turquoise:40e0d0, violet:ee82ee,
+    wheat:f5deb3, white:ffffff, whitesmoke:f5f5f5, yellow:ffff00,
+    yellowgreen:9acd32,
+  `
+    .split(/[\s,]+/)
+    .filter(Boolean)
+    .map((e) => e.split(":")),
+);
+
+// a channel as a number (0-255 scale) or a percentage of that scale
+const channel = (t) => {
+  const m = /^([+-]?(?:\d+\.?\d*|\.\d+)(?:e[+-]?\d+)?)(%?)$/i.exec(t);
+  if (!m) return NaN;
+  return Math.min(255, Math.max(0, m[2] ? (+m[1] * 255) / 100 : +m[1]));
+};
+const alphaOf = (t) => {
+  if (t === undefined) return 1;
+  const m = /^([+-]?(?:\d+\.?\d*|\.\d+)(?:e[+-]?\d+)?)(%?)$/i.exec(t);
+  if (!m) return NaN;
+  return Math.min(1, Math.max(0, m[2] ? +m[1] / 100 : +m[1]));
+};
+const hueOf = (t) => {
+  const m =
+    /^([+-]?(?:\d+\.?\d*|\.\d+)(?:e[+-]?\d+)?)(deg|grad|rad|turn)?$/i.exec(t);
+  if (!m) return NaN;
+  const k = { deg: 1, grad: 0.9, rad: 180 / Math.PI, turn: 360 }[
+    (m[2] || "deg").toLowerCase()
+  ];
+  return (((+m[1] * k) % 360) + 360) % 360;
+};
+const pctOf = (t) => {
+  const m = /^([+-]?(?:\d+\.?\d*|\.\d+)(?:e[+-]?\d+)?)%?$/i.exec(t);
+  return m ? Math.min(100, Math.max(0, +m[1])) / 100 : NaN;
+};
+const hslToRgb = (h, s, l) => {
+  const a = s * Math.min(l, 1 - l);
+  const f = (n) => {
+    const k = (n + h / 30) % 12;
+    return (l - a * Math.max(-1, Math.min(k - 3, 9 - k, 1))) * 255;
+  };
+  return [f(0), f(8), f(4)];
+};
+
+// rgb()/rgba()/hsl()/hsla(), comma or space separated, `/` alpha → { rgb, a } or null
+const parseFunc = (s) => {
+  const m = /^(rgba?|hsla?)\(\s*([^()]*?)\s*\)$/i.exec(s);
+  if (!m) return null;
+  const hsl = m[1].toLowerCase().startsWith("hsl");
+  let parts;
+  let alpha;
+  if (m[2].includes(",")) {
+    if (m[2].includes("/")) return null;
+    parts = m[2].split(/\s*,\s*/);
+    if (parts.length === 4) alpha = parts.pop();
+  } else {
+    const [main, a, ...extra] = m[2].split(/\s*\/\s*/);
+    if (extra.length) return null;
+    parts = main.split(/\s+/);
+    alpha = a;
+  }
+  if (parts.length !== 3) return null;
+  const a = alphaOf(alpha);
+  let rgb;
+  if (hsl) {
+    const h = hueOf(parts[0]);
+    // a bare number is read as a percentage, as CSS Color 4 does
+    const [sat, lig] = parts
+      .slice(1)
+      .map((t) => pctOf(/%$/.test(t) ? t : `${t}%`));
+    rgb = [h, sat, lig].some(Number.isNaN) ? null : hslToRgb(h, sat, lig);
+  } else rgb = parts.map(channel);
+  return !rgb || [...rgb, a].some(Number.isNaN) ? null : { rgb, a };
+};
+
+// colour string → { rgb, a } (null for none / transparent / unparsable)
 const parseColor = (s) => {
   s = typeof s === "string" ? s.trim() : s;
   if (!s || /^(none|transparent)$/i.test(s)) return null;
-  if (/^black$/i.test(s)) return { rgb: [0, 0, 0], a: 1 };
-  if (/^white$/i.test(s)) return { rgb: [255, 255, 255], a: 1 };
-  let m = /^#([0-9a-f]{3,4}|[0-9a-f]{6}|[0-9a-f]{8})$/i.exec(s);
+  if (/^[a-z]+$/i.test(s)) {
+    const h = NAMED[s.toLowerCase()];
+    return h ? parseColor(`#${h}`) : null;
+  }
+  const m = /^#([0-9a-f]{3,4}|[0-9a-f]{6}|[0-9a-f]{8})$/i.exec(s);
   if (m) {
     // #rgb[a] → #rrggbb[aa]
     const h = m[1].length <= 4 ? [...m[1]].map((c) => c + c).join("") : m[1];
@@ -97,13 +220,7 @@ const parseColor = (s) => {
       a: h.length === 8 ? parseInt(h.slice(6), 16) / 255 : 1,
     };
   }
-  m =
-    /^rgba?\(\s*([\d.]+)\s*,\s*([\d.]+)\s*,\s*([\d.]+)\s*(?:,\s*([\d.]+)\s*)?\)$/i.exec(
-      s,
-    );
-  if (m)
-    return { rgb: [+m[1], +m[2], +m[3]], a: m[4] === undefined ? 1 : +m[4] };
-  return null;
+  return parseFunc(s);
 };
 const over = (top, bottom) =>
   top.rgb.map((c, i) => c * top.a + bottom[i] * (1 - top.a));
@@ -305,9 +422,17 @@ const ruleMatches = (r, el) =>
 function declared(el, prop, theme, ctx) {
   if (el.style && prop in el.style) return el.style[prop];
   if (theme === "dark") {
+    // the most specific matching rule; a later rule wins a tie
     let v;
-    for (const r of ctx.dark)
-      if (prop in r.props && ruleMatches(r, el)) v = r.props[prop];
+    let best = [-1, -1];
+    for (const r of ctx.dark) {
+      if (!(prop in r.props) || !ruleMatches(r, el)) continue;
+      const spec = [r.conds.length, r.tag ? 1 : 0];
+      if (spec[0] > best[0] || (spec[0] === best[0] && spec[1] >= best[1])) {
+        best = spec;
+        v = r.props[prop];
+      }
+    }
     if (v !== undefined) return v;
   }
   return el.a[prop];
@@ -356,7 +481,7 @@ function paint(el, attr, theme, ctx) {
     );
   return { raw, color };
 }
-const isNone = (raw) => /^none$/i.test(raw.trim());
+const isNone = (raw) => /^(none|transparent)$/i.test(raw.trim());
 
 // accumulated translate() of the element and its ancestors; other transforms → notes
 function offset(el, notes) {
@@ -622,8 +747,8 @@ export function auditSvg(
       const p = paint(e, attr, theme, ctx);
       if (isNone(p.raw)) continue;
       if (!p.color) {
-        notes.add(
-          `<${e.tag}> ${attr} ${p.raw} is not a colour the audit can read (skipped)`,
+        out.push(
+          `${theme}: ${e.tag} ${attr} has a colour the audit cannot read (${p.raw})`,
         );
         continue;
       }

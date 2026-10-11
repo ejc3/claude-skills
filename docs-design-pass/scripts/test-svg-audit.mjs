@@ -628,6 +628,316 @@ test("F7 an inherited fill overrides the initial value", () => {
   );
 });
 
+// ---- colour forms: a colour the audit cannot read is an issue, never a pass ------------------------
+
+const CSS_NAMES = [
+  "aliceblue",
+  "antiquewhite",
+  "aqua",
+  "aquamarine",
+  "azure",
+  "beige",
+  "bisque",
+  "black",
+  "blanchedalmond",
+  "blue",
+  "blueviolet",
+  "brown",
+  "burlywood",
+  "cadetblue",
+  "chartreuse",
+  "chocolate",
+  "coral",
+  "cornflowerblue",
+  "cornsilk",
+  "crimson",
+  "cyan",
+  "darkblue",
+  "darkcyan",
+  "darkgoldenrod",
+  "darkgray",
+  "darkgreen",
+  "darkgrey",
+  "darkkhaki",
+  "darkmagenta",
+  "darkolivegreen",
+  "darkorange",
+  "darkorchid",
+  "darkred",
+  "darksalmon",
+  "darkseagreen",
+  "darkslateblue",
+  "darkslategray",
+  "darkslategrey",
+  "darkturquoise",
+  "darkviolet",
+  "deeppink",
+  "deepskyblue",
+  "dimgray",
+  "dimgrey",
+  "dodgerblue",
+  "firebrick",
+  "floralwhite",
+  "forestgreen",
+  "fuchsia",
+  "gainsboro",
+  "ghostwhite",
+  "gold",
+  "goldenrod",
+  "gray",
+  "green",
+  "greenyellow",
+  "grey",
+  "honeydew",
+  "hotpink",
+  "indianred",
+  "indigo",
+  "ivory",
+  "khaki",
+  "lavender",
+  "lavenderblush",
+  "lawngreen",
+  "lemonchiffon",
+  "lightblue",
+  "lightcoral",
+  "lightcyan",
+  "lightgoldenrodyellow",
+  "lightgray",
+  "lightgreen",
+  "lightgrey",
+  "lightpink",
+  "lightsalmon",
+  "lightseagreen",
+  "lightskyblue",
+  "lightslategray",
+  "lightslategrey",
+  "lightsteelblue",
+  "lightyellow",
+  "lime",
+  "limegreen",
+  "linen",
+  "magenta",
+  "maroon",
+  "mediumaquamarine",
+  "mediumblue",
+  "mediumorchid",
+  "mediumpurple",
+  "mediumseagreen",
+  "mediumslateblue",
+  "mediumspringgreen",
+  "mediumturquoise",
+  "mediumvioletred",
+  "midnightblue",
+  "mintcream",
+  "mistyrose",
+  "moccasin",
+  "navajowhite",
+  "navy",
+  "oldlace",
+  "olive",
+  "olivedrab",
+  "orange",
+  "orangered",
+  "orchid",
+  "palegoldenrod",
+  "palegreen",
+  "paleturquoise",
+  "palevioletred",
+  "papayawhip",
+  "peachpuff",
+  "peru",
+  "pink",
+  "plum",
+  "powderblue",
+  "purple",
+  "rebeccapurple",
+  "red",
+  "rosybrown",
+  "royalblue",
+  "saddlebrown",
+  "salmon",
+  "sandybrown",
+  "seagreen",
+  "seashell",
+  "sienna",
+  "silver",
+  "skyblue",
+  "slateblue",
+  "slategray",
+  "slategrey",
+  "snow",
+  "springgreen",
+  "steelblue",
+  "tan",
+  "teal",
+  "thistle",
+  "tomato",
+  "turquoise",
+  "violet",
+  "wheat",
+  "white",
+  "whitesmoke",
+  "yellow",
+  "yellowgreen",
+];
+const line = (stroke) =>
+  `<line x1="0" y1="50" x2="100" y2="50" stroke="${stroke}"/>`;
+// the "at N:1" part of the light-theme issue on the line
+const ratio = (stroke) =>
+  /at ([\d.]+):1/.exec(
+    marks(line(stroke)).find((i) => /^light: line stroke/.test(i)) ?? "",
+  )?.[1];
+
+test("G1 all 148 CSS named colours are read (none reported as unreadable)", () => {
+  assert.equal(new Set(CSS_NAMES).size, 148);
+  for (const name of CSS_NAMES) {
+    const out = marks(line(name));
+    assert.ok(
+      !out.some((i) => /cannot read/.test(i)),
+      `${name}: ${JSON.stringify(out)}`,
+    );
+  }
+});
+test("G1 pale named colours are flagged, not skipped", () => {
+  for (const name of ["gainsboro", "whitesmoke", "lightgray", "yellow", "snow"])
+    has(marks(line(name)), new RegExp(`^light: line stroke ${name} at `));
+});
+test("G1 a named colour gets the contrast of its hex value (case-insensitive)", () => {
+  assert.equal(ratio("gainsboro"), ratio("#dcdcdc"));
+  assert.ok(ratio("gainsboro"));
+  assert.equal(ratio("Yellow"), ratio("#ffff00"));
+  assert.equal(ratio("lightgrey"), ratio("#d3d3d3"));
+  assert.equal(ratio("rebeccapurple"), undefined); // #663399 is dark enough: no issue
+});
+test("G1 a pale named colour on text and on a mark is flagged with its name", () => {
+  has(marks(line("gainsboro")), /^light: line stroke gainsboro at /);
+  has(
+    marks(text("pale", `fill="gainsboro"`)),
+    /^light: "pale" gainsboro at [\d.]+:1 \(needs 4\.5:1\)/,
+  );
+});
+test("G1 hsl() and hsla() equal their rgb value", () => {
+  assert.equal(ratio("hsl(60, 100%, 50%)"), ratio("#ffff00"));
+  assert.equal(ratio("hsla(60, 100%, 50%, 1)"), ratio("#ffff00"));
+  assert.equal(ratio("hsl(0 0% 86.27%)"), ratio("rgb(220 220 220)"));
+  assert.equal(ratio("hsl(0.1666667turn 100% 50%)"), ratio("#ffff00"));
+  assert.equal(ratio("hsl(120deg 100% 25%)"), ratio("green"));
+  assert.ok(ratio("hsl(60, 100%, 50%)"));
+});
+test("G1 space-separated rgb() with / alpha and % channels", () => {
+  assert.equal(ratio("rgb(220 220 220)"), ratio("#dcdcdc"));
+  assert.equal(ratio("rgb(86.27% 86.27% 86.27%)"), ratio("#dcdcdc"));
+  assert.equal(
+    ratio("rgba(220 220 220 / 0.5)"),
+    ratio("rgba(220,220,220,0.5)"),
+  );
+  assert.equal(ratio("rgb(0 0 0 / 50%)"), ratio("rgba(0,0,0,0.5)"));
+  assert.ok(ratio("rgb(220 220 220 / 50%)"));
+  has(
+    marks(line("rgb(255 255 0 / 50%)")),
+    /^light: line stroke rgb\(255 255 0 \/ 50%\) \(50% opaque\)/,
+  );
+});
+test("G1 text in hsl() and space-separated rgb() is contrast-checked", () => {
+  has(marks(text("a", `fill="hsl(0 0% 86%)"`)), /^light: "a" hsl/);
+  has(marks(text("b", `fill="rgb(220 220 220 / 100%)"`)), /^light: "b" rgb/);
+});
+test("G1 a colour the audit cannot read on a mark is an issue in each theme", () => {
+  for (const bad of [
+    "url(#grad)",
+    "var(--ink)",
+    "color(srgb 1 1 1)",
+    "lab(50% 40 59)",
+    "hsl(0 0% none)",
+    "rgb(1 2)",
+    "rgb(1, 2 3)",
+    "rgb(1 2 3 / 0.5 / 1)",
+    "notacolour",
+  ]) {
+    const out = marks(line(bad));
+    has(out, /^light: line stroke has a colour the audit cannot read/);
+    has(out, /^dark: line stroke has a colour the audit cannot read/);
+    assert.ok(
+      out.some((i) => i.includes(`(${bad})`)),
+      JSON.stringify(out),
+    );
+  }
+});
+test("G1 an unreadable fill on a rect and on a circle is an issue, with exit 1 from the CLI", () => {
+  const body = `<circle cx="20" cy="70" r="4" fill="url(#g)"/>`;
+  has(marks(body), /^light: circle fill has a colour the audit cannot read/);
+  const f = chartFile("unreadable.svg", svg({ body }));
+  expectExit(cli(f), 1, /FAIL/);
+});
+test("G1 transparent and none draw nothing and are not issues", () => {
+  assert.deepEqual(marks(line("transparent")), []);
+  assert.deepEqual(marks(text("t", `fill="transparent"`)), []);
+});
+test("G1 currentColor resolves through color", () => {
+  has(
+    marks(`<g color="gainsboro">${line("currentColor")}</g>`),
+    /^light: line stroke gainsboro at /,
+  );
+});
+test("G1 --grid-color accepts a named colour", () => {
+  const f = chartFile("gridname.svg", svg({ body: line("gainsboro") }));
+  expectExit(cli(f), 1);
+  expectExit(cli("--grid-color", "gainsboro", f), 0);
+});
+
+// ---- dark rules resolve by specificity, then source order ------------------------------------------
+
+const rules = (...r) =>
+  `@media (prefers-color-scheme: dark){rect[fill="#ffffff"]{fill:#0d1117}${r.join("")}}`;
+test("G3 an attribute+tag rule beats a later attribute-only rule", () => {
+  const style = rules(
+    `text[fill="#000"]{fill:#000}`,
+    `[fill="#000"]{fill:#fff}`,
+  );
+  const body = text("x", `fill="#000"`);
+  has(issuesOf(svg({ style, body })), /^dark: "x" #000 at/);
+});
+test("G3 the same rules in the other order resolve the same way", () => {
+  const style = rules(
+    `[fill="#000"]{fill:#fff}`,
+    `text[fill="#000"]{fill:#000}`,
+  );
+  has(
+    issuesOf(svg({ style, body: text("x", `fill="#000"`) })),
+    /^dark: "x" #000 at/,
+  );
+});
+test("G3 equal specificity: the later rule wins", () => {
+  const style = rules(
+    `text[fill="#000"]{fill:#000}`,
+    `text[fill="#000"]{fill:#fff}`,
+  );
+  assert.deepEqual(
+    issuesOf(svg({ style, body: text("x", `fill="#000"`) })),
+    [],
+  );
+});
+test("G3 two attribute conditions beat a tag plus one condition", () => {
+  const style = rules(
+    `[fill="#000"][font-size="12"]{fill:#fff}`,
+    `text[fill="#000"]{fill:#000}`,
+  );
+  assert.deepEqual(
+    issuesOf(svg({ style, body: text("x", `fill="#000"`) })),
+    [],
+  );
+});
+test("G3 specificity is per property: a lower rule still supplies a property the higher one omits", () => {
+  const style = rules(
+    `text[fill="#000"]{font-size:20px}`,
+    `[fill="#000"]{fill:#fff}`,
+  );
+  assert.deepEqual(
+    issuesOf(svg({ style, body: text("x", `fill="#000"`) })),
+    [],
+  );
+});
+
 // ---- CLI -----------------------------------------------------------------------------------------------------------
 
 test("CLI --grid-color changes the hairline exemption", () => {
@@ -641,7 +951,7 @@ test("CLI --grid-color changes the hairline exemption", () => {
 });
 test("CLI a bad --grid-color is a usage error naming the problem", () => {
   const f = chartFile("grid2.svg", svg({}));
-  const r = cli("--grid-color", "blue", f);
+  const r = cli("--grid-color", "not-a-colour", f);
   expectExit(r, 2);
   assert.match(r.stderr, /gridColor must be a colour/);
   assert.match(r.stderr, /usage:/);
