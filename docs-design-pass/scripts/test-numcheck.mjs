@@ -335,3 +335,32 @@ test("CLI with too few arguments exits 2", () => {
   assert.equal(r.status, 2);
   assert.match(r.stderr, /usage/);
 });
+
+// ---- leading-dot decimals -------------------------------------------------------------------------------------
+
+test("DOT .5 ms -> 5 ms is an added number", () => {
+  const r = edit("took .5 ms here\n", "took 5 ms here\n");
+  assert.equal(r.status, 1, r.stdout + r.stderr);
+  assert.match(r.stdout, /ADDED 5ms/);
+});
+test("DOT -.5 -> .5 is an added number (the sign is part of the token)", () => {
+  const r = edit("delta -.5 here\n", "delta .5 here\n");
+  assert.equal(r.status, 1, r.stdout + r.stderr);
+  assert.match(r.stdout, /ADDED \.5/);
+});
+test("DOT 0.5 and .5 are different tokens", () => {
+  const r = edit("took 0.5 here\n", "took .5 here\n");
+  assert.equal(r.status, 1, r.stdout + r.stderr);
+  assert.match(r.stdout, /ADDED \.5/);
+});
+test("DOT an unchanged .5 ms is unchanged", () => {
+  const r = edit("took .5 ms here\n", "here took .5 ms\n");
+  assert.equal(r.status, 0, r.stdout + r.stderr);
+});
+test("DOT a version v1.2.3 does not yield a .3 token and is unchanged", () => {
+  const same = edit("use v1.2.3 now\n", "now use v1.2.3\n");
+  assert.equal(same.status, 0, same.stdout + same.stderr);
+  const r = edit("use v1.2.3 now\n", "use v1.2.3 and v1.2.4 now\n");
+  assert.equal(r.status, 1);
+  assert.doesNotMatch(r.stdout, /ADDED[^\n]*\.[34]\b(?!\.)/);
+});

@@ -92,7 +92,11 @@ const NOUN_FORM = new Map(
   ]),
 );
 const SPACE = "[ \\t\\u00a0\\u202f]";
-const NUMBER = /(?<n>(?:(?<![\p{L}\p{N}])[−-])?\d(?:[\d,]*\d)?(?:\.\d+)?)/gu;
+// an optional sign, then digits with an optional fraction, or a leading-dot decimal (.5).
+// The sign and a bare leading dot both need a non-alphanumeric left neighbour, so the
+// ".3" of "v1.2.3" and the "-" of "x-5" are not tokens of their own.
+const NUMBER =
+  /(?<n>(?:(?<![\p{L}\p{N}])[−-])?(?:\d(?:[\d,]*\d)?(?:\.\d+)?|(?<![\p{L}\p{N}.])\.\d+))/gu;
 const TAIL = new RegExp(
   `^(?<sp>${SPACE}?)(?<hy>-?)(?<tok>[\\p{L}°%×]+(?:/\\p{L}+)*)(?![\\p{L}\\p{N}°%×])`,
   "u",

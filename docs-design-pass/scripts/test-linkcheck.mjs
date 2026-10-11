@@ -315,3 +315,50 @@ test("CLI with no files or an unreadable file exits 2", () => {
   expectExit(run(dir), 2);
   expectExit(run(dir, "gone.md"), 2);
 });
+
+// ---- reference-style usages ------------------------------------------------------------------------------------
+
+test("REF a full reference with no definition is broken", () => {
+  expectBroken(
+    check("see [guide][missing]\n"),
+    1,
+    /a\.md:1: undefined reference \[guide\]\[missing\]/,
+  );
+});
+test("REF a collapsed reference with no definition is broken", () => {
+  expectBroken(
+    check("see [guide][]\n"),
+    1,
+    /a\.md:1: undefined reference \[guide\]\[\]/,
+  );
+});
+test("REF labels match case-insensitively with whitespace collapsed", () => {
+  expectClean(
+    check(
+      "[Guide][g] and [Two   words][] and [x][ TWO words ]\n\n[G]: b.md\n[two words]: b.md\n",
+      {
+        "b.md": "# B\n",
+      },
+    ),
+    5,
+  );
+});
+test("REF a defined reference whose destination is missing is reported once at the definition", () => {
+  const r = check("[guide][g]\n\n[g]: nope.md\n");
+  expectBroken(r, 1, /a\.md:3: missing file nope\.md/);
+});
+test("REF a shortcut [label] with no definition is ordinary text", () => {
+  expectClean(check("an array like [a] or [1, 2] is fine\n"), 0);
+});
+test("REF a reference inside a code span or fence is ignored", () => {
+  expectClean(check("`[x][y]` and `[z][]`\n```\n[x][y]\n```\n"), 0);
+});
+test("REF an image reference with no definition is broken", () => {
+  expectBroken(check("![alt][img]\n"), 1, /undefined reference \[alt\]\[img\]/);
+});
+test("REF a definition inside a blockquote or list item counts", () => {
+  expectClean(
+    check("[a][r] [b][s]\n\n> [r]: b.md\n- [s]: b.md\n", { "b.md": "# B\n" }),
+    4,
+  );
+});

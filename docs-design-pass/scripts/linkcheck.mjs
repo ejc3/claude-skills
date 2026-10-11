@@ -5,7 +5,10 @@
 //   node linkcheck.mjs <doc.md>...   (exit 1 on any broken link, 2 on a usage or read error)
 //
 // Link forms read: [t](dest), [t](dest "title"), [t](dest 'title'), [t](<dest with spaces>),
-// ![alt](src), and `[ref]: dest` definitions. A destination starting with `/` is
+// ![alt](src), and `[ref]: dest` definitions. Full [t][label] and collapsed [label][]
+// reference usages must name a definition (labels match case-insensitively, whitespace
+// collapsed); a shortcut [label] is ordinary text unless a definition exists, and then the
+// definition's destination is what gets checked. A destination starting with `/` is
 // repository-root-relative: it resolves against the git top-level of the doc.
 // `?query` is ignored and `#L10` / `#L10-L20` line anchors are accepted.
 import { readFileSync, statSync } from "node:fs";
@@ -127,9 +130,46 @@ const LINK =
 function linkDests(line) {
   const text = line.replace(/(`+)[\s\S]*?\1/g, (m) => " ".repeat(m.length));
   const out = [];
-  const def = /^ {0,3}\[[^\]]+\]:\s*(?:<([^>]*)>|(\S+))/.exec(text);
+  const def =
+    /^(?:[ \t]*>)*[ \t]*(?:(?:[-*+]|\d+[.)])[ \t]+)?\[[^\]]+\]:\s*(?:<([^>]*)>|(\S+))/.exec(
+      text,
+    );
   if (def) out.push(def[1] ?? def[2]);
   for (const m of text.matchAll(LINK)) out.push(m[1] ?? m[2]);
+  return out;
+}
+
+// reference labels compare case-insensitively with internal whitespace collapsed
+const normLabel = (s) => s.trim().replace(/\s+/g, " ").toLowerCase();
+
+// the labels of the `[label]: dest` definitions in a document's lines (fences already blank)
+function definedLabels(lines) {
+  const set = new Set();
+  for (const [, line] of lines) {
+    const m =
+      /^(?:[ \t]*>)*[ \t]*(?:(?:[-*+]|\d+[.)])[ \t]+)?\[((?:\\.|[^\]\\])+)\]:/.exec(
+        line,
+      );
+    if (m && m[1].trim() && !m[1].startsWith("^")) set.add(normLabel(m[1]));
+  }
+  return set;
+}
+
+// full [text][label] and collapsed [label][] usages on one line (code spans removed):
+// [{ label, shown }]
+function refUsages(line) {
+  const text = line.replace(/(`+)[\s\S]*?\1/g, (m) => " ".repeat(m.length));
+  const out = [];
+  for (const m of text.matchAll(
+    /(?<!\\)\[((?:\\.|[^\[\]\\])*\S(?:\\.|[^\[\]\\])*)\]\[([^\[\]]*)\]/g,
+  )) {
+    const label = m[2].trim() ? m[2] : m[1];
+    if (label.startsWith("^")) continue;
+    out.push({
+      label,
+      shown: m[2].trim() ? `[${m[1]}][${m[2]}]` : `[${m[1]}][]`,
+    });
+  }
   return out;
 }
 
@@ -195,7 +235,16 @@ for (const f of files) {
     console.error(`${f}: ${e.message}`);
     process.exit(2);
   }
-  for (const [i, line] of outsideFences(text.split("\n"))) {
+  const lines = [...outsideFences(text.split("\n"))];
+  const defined = definedLabels(lines);
+  for (const [i, line] of lines) {
+    for (const u of refUsages(line)) {
+      checked++;
+      if (!defined.has(normLabel(u.label))) {
+        bad++;
+        console.log(`${f}:${i + 1}: undefined reference ${u.shown}`);
+      }
+    }
     for (const href of linkDests(line)) {
       if (!href || isExternal(href)) continue;
       checked++;

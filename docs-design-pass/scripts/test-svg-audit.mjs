@@ -986,3 +986,27 @@ test("CLI prints notes next to an ok result", () => {
   // black text on the assumed #0d1117 dark page
   expectExit(cli(f), 1, /note: no background rect/);
 });
+
+// ---- the page is resolved per theme --------------------------------------------------------
+
+test("BG a canvas rect that is none in light and white in dark is the dark page", () => {
+  const style = `@media (prefers-color-scheme: dark){rect[fill="none"]{fill:#ffffff}text[fill="#000000"]{fill:#ffffff}}`;
+  const out = issuesOf(
+    svg({
+      style,
+      bg: `<rect width="200" height="100" fill="none"/>`,
+      body: text("x", `fill="#000000"`),
+    }),
+  );
+  has(out, /^dark: "x" #ffffff at 1\.00:1/);
+  assert.ok(!out.some((i) => /^light:/.test(i)), JSON.stringify(out));
+});
+test("BG a canvas rect filled in light and none in dark leaves the dark default page", () => {
+  const style = `@media (prefers-color-scheme: dark){rect[fill="#ffffff"]{fill:none}}`;
+  const out = audit(svg({ style, body: text("x", `fill="#1c2330"`) }));
+  has([...out], /^dark: "x"/);
+  assert.ok(
+    out.notes.some((n) => /no background rect/.test(n)),
+    JSON.stringify(out.notes),
+  );
+});

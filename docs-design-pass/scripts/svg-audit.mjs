@@ -581,29 +581,38 @@ export function auditSvg(
     v !== undefined &&
     (v.trim() === "100%" ||
       (total !== null && Math.abs(parseFloat(v) - total) < 0.5));
-  const filled = (e) => !isNone(paint(e, "fill", "light", ctx).raw);
+  const filledIn = (e, theme) => !isNone(paint(e, "fill", theme, ctx).raw);
 
-  // the page: the first filled rect that covers the whole canvas, else the fallback
-  const bgRect = shapes.find((e) => {
+  // the page, per theme: the first rect covering the whole canvas that has a fill in THAT
+  // theme (a rect that is `none` in light can gain a fill from a dark rule, and the
+  // reverse), else the theme's default page with a note
+  const fullCanvas = shapes.filter((e) => {
     if (e.tag !== "rect") return false;
     const g = geom(e);
     return (
       Math.abs(g.x - originX) < 0.5 &&
       Math.abs(g.y - originY) < 0.5 &&
       sizeIs(e.a.width, W) &&
-      sizeIs(e.a.height, H) &&
-      filled(e)
+      sizeIs(e.a.height, H)
     );
   });
+  const bgRects = {};
   const page = {};
   for (const theme of THEMES) {
-    const f = bgRect ? paint(bgRect, "fill", theme, ctx).color : null;
+    bgRects[theme] = fullCanvas.find((e) => filledIn(e, theme));
+    const f = bgRects[theme]
+      ? paint(bgRects[theme], "fill", theme, ctx).color
+      : null;
     page[theme] = f ? over(f, FALLBACK_PAGE[theme]) : FALLBACK_PAGE[theme];
     if (!f) notes.add(FALLBACK_NOTE);
   }
+  const isBg = (e) => THEMES.some((t) => bgRects[t] === e);
 
+  // rects that carry a fill in either theme; a text's backdrop is chosen per theme below
   const rects = shapes
-    .filter((e) => e.tag === "rect" && e !== bgRect && filled(e))
+    .filter(
+      (e) => e.tag === "rect" && !isBg(e) && THEMES.some((t) => filledIn(e, t)),
+    )
     .map(geom)
     .filter((r) => r.w > 3 && r.h > 3);
 
@@ -638,8 +647,8 @@ export function auditSvg(
     const y = attrUp(run, "y") + dy;
     const sizeRaw = (theme) => computed(run.el, "font-size", theme, ctx);
     const size = fontPx(sizeRaw("light"));
-    // the smallest filled rect drawn under the text's anchor point
-    const under = rects
+    // the rects drawn under the text's anchor point, smallest first
+    const underAll = rects
       .filter(
         (r) =>
           x > r.x &&
@@ -647,7 +656,8 @@ export function auditSvg(
           y - size * 0.35 > r.y &&
           y - size * 0.35 < r.y + r.h,
       )
-      .sort((a, b) => a.w * a.h - b.w * b.h)[0];
+      .sort((a, b) => a.w * a.h - b.w * b.h);
+    const under = underAll.find((r) => filledIn(r.e, "light")) ?? underAll[0];
     const isBox =
       under &&
       !isNone(paint(under.e, "stroke", "light", ctx).raw) &&
@@ -683,8 +693,9 @@ export function auditSvg(
         continue;
       }
       let bg = page[theme];
-      if (under) {
-        const f = paint(under.e, "fill", theme, ctx).color;
+      const backdrop = underAll.find((r) => filledIn(r.e, theme));
+      if (backdrop) {
+        const f = paint(backdrop.e, "fill", theme, ctx).color;
         if (f) bg = over(f, bg);
       }
       const c = contrast(over(p.color, bg), bg);
@@ -764,7 +775,7 @@ export function auditSvg(
     }
   };
   for (const e of shapes)
-    if (e !== bgRect) for (const attr of PAINTS.get(e.tag)) checkMark(e, attr);
+    if (!isBg(e)) for (const attr of PAINTS.get(e.tag)) checkMark(e, attr);
   return done();
 }
 
