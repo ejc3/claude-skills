@@ -8,7 +8,7 @@
 // ![alt](src), and `[ref]: dest` definitions. A destination starting with `/` is
 // repository-root-relative: it resolves against the git top-level of the doc.
 // `?query` is ignored and `#L10` / `#L10-L20` line anchors are accepted.
-import { existsSync, readFileSync, statSync } from "node:fs";
+import { readFileSync, statSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { dirname, join, resolve } from "node:path";
 
@@ -48,62 +48,34 @@ function headingText(raw) {
     .replace(/!?\[([^\]]*)\]\[[^\]]*\]/g, "$1")
     .replace(/<[^>]+>/g, "");
   t = decodeEntities(t);
-  const word = "\\p{L}\\p{N}";
-  const pairs = [
-    [/\*\*\*(?=\S)([\s\S]*?\S)\*\*\*/gu, "$1"],
-    [/\*\*(?=\S)([\s\S]*?\S)\*\*/gu, "$1"],
-    [
-      new RegExp(
-        `(?<![${word}_])___(?=\\S)([\\s\\S]*?\\S)___(?![${word}_])`,
-        "gu",
-      ),
-      "$1",
-    ],
-    [
-      new RegExp(
-        `(?<![${word}_])__(?=\\S)([\\s\\S]*?\\S)__(?![${word}_])`,
-        "gu",
-      ),
-      "$1",
-    ],
-    [/\*(?=\S)([\s\S]*?\S)\*/gu, "$1"],
-    [
-      new RegExp(`(?<![${word}_])_(?=\\S)([\\s\\S]*?\\S)_(?![${word}_])`, "gu"),
-      "$1",
-    ],
-    [/~~(?=\S)([\s\S]*?\S)~~/gu, "$1"],
-  ];
-  for (const [re, to] of pairs) t = t.replace(re, to);
+  // * and ~ never reach the slug; only underscore emphasis (a pair not touching a word
+  // character) must be removed, so snake_case_names keep theirs
+  t = t.replace(
+    /(?<![\p{L}\p{N}_])(_{1,3})(?=\S)([\s\S]*?\S)\1(?![\p{L}\p{N}_])/gu,
+    "$2",
+  );
   return t.replace(/\u0000(\d+)\u0000/g, (_, i) => keep[+i]);
 }
 
-// fence open/close tracking: ``` or ~~~, closed by the same character, at least as long
-const fenceOf = (line) => {
-  const m = /^ {0,3}(`{3,}|~{3,})/.exec(line);
-  return m ? { ch: m[1][0], n: m[1].length } : null;
-};
+// Every line as [index, text], with a fenced block (``` or ~~~, closed by the same
+// character at least as long) and its delimiter lines blank, so line numbers survive.
 function* outsideFences(lines) {
-  let open = null;
-  for (let i = 0; i < lines.length; i++) {
-    const f = fenceOf(lines[i]);
-    if (open) {
-      if (
-        f &&
-        f.ch === open.ch &&
-        f.n >= open.n &&
-        /^ {0,3}[`~]+\s*$/.test(lines[i])
-      )
-        open = null;
+  let close = null;
+  for (const [i, line] of lines.entries()) {
+    if (close) {
+      if (close.test(line)) close = null;
+      yield [i, ""];
       continue;
     }
-    if (f) {
-      open = f;
-      continue;
-    }
-    yield [i, lines[i]];
+    const open = /^ {0,3}(`{3,}|~{3,})/.exec(line);
+    if (open)
+      close = new RegExp(`^ {0,3}${open[1][0]}{${open[1].length},}\\s*$`);
+    yield [i, open ? "" : line];
   }
 }
 
+const ANCHOR_ATTR =
+  /<(?:a\b[^>]*?\s(?:id|name)|[a-z][a-z0-9]*\b[^>]*?\sid)\s*=\s*(?:"([^"]+)"|'([^']+)')/gi;
 const anchorsCache = new Map();
 function anchors(file) {
   if (anchorsCache.has(file)) return anchorsCache.get(file);
@@ -116,11 +88,10 @@ function anchors(file) {
     seen.set(s, n + 1);
     set.add(n ? `${s}-${n}` : s);
   };
+  const kept = [];
   let para = []; // consecutive paragraph lines: a setext underline turns them into a heading
-  let prev = -2;
-  for (const [i, line] of outsideFences(text.split("\n"))) {
-    if (i !== prev + 1) para = [];
-    prev = i;
+  for (const [, line] of outsideFences(text.split("\n"))) {
+    kept.push(line);
     const atx = /^ {0,3}#{1,6}(?:[ \t]+(.*?))?[ \t]*$/.exec(line);
     if (atx) {
       add((atx[1] ?? "").replace(/(?:^|[ \t]+)#+$/, ""));
@@ -141,17 +112,16 @@ function anchors(file) {
       para.push(line.trim());
     else para = [];
   }
-  for (const m of text.matchAll(
-    /<a\s[^>]*?\b(?:name|id)\s*=\s*(?:"([^"]+)"|'([^']+)')/gi,
-  ))
-    set.add(m[1] ?? m[2]);
-  for (const m of text.matchAll(
-    /<(?!a\s)[a-z][a-z0-9]*\s[^>]*?\bid\s*=\s*(?:"([^"]+)"|'([^']+)')/gi,
-  ))
-    set.add(m[1] ?? m[2]);
+  // id on any tag, name on <a>, outside code blocks
+  for (const m of kept.join("\n").matchAll(ANCHOR_ATTR)) set.add(m[1] ?? m[2]);
   anchorsCache.set(file, set);
   return set;
 }
+
+// [text](dest "title"): dest is <angle> or bare with one level of balanced parentheses;
+// the title is "…", '…' or (…); the link must close with `)`
+const LINK =
+  /\]\(\s*(?:<([^>]*)>|((?:[^\s()]|\([^\s()]*\))*))(?:\s+(?:"[^"]*"|'[^']*'|\([^)]*\)))?\s*\)/g;
 
 // destinations on one line (code spans removed), in order
 function linkDests(line) {
@@ -159,41 +129,11 @@ function linkDests(line) {
   const out = [];
   const def = /^ {0,3}\[[^\]]+\]:\s*(?:<([^>]*)>|(\S+))/.exec(text);
   if (def) out.push(def[1] ?? def[2]);
-  for (const m of text.matchAll(/\]\(/g)) {
-    let i = m.index + 2;
-    while (/\s/.test(text[i] ?? "")) i++;
-    let dest;
-    if (text[i] === "<") {
-      const end = text.indexOf(">", i);
-      if (end < 0) continue;
-      dest = text.slice(i + 1, end);
-      i = end + 1;
-    } else {
-      let depth = 0;
-      const from = i;
-      for (; i < text.length; i++) {
-        const c = text[i];
-        if (/\s/.test(c)) break;
-        if (c === "(") depth++;
-        else if (c === ")" && depth-- === 0) break;
-      }
-      dest = text.slice(from, i);
-      if (depth > 0) continue;
-    }
-    while (/\s/.test(text[i] ?? "")) i++;
-    // optional title: "…", '…' or (…); the link must then close with `)`
-    const q = text[i];
-    if (q === '"' || q === "'" || q === "(") {
-      const end = text.indexOf(q === "(" ? ")" : q, i + 1);
-      if (end < 0) continue;
-      i = end + 1;
-      while (/\s/.test(text[i] ?? "")) i++;
-    }
-    if (text[i] !== ")") continue;
-    out.push(dest);
-  }
+  for (const m of text.matchAll(LINK)) out.push(m[1] ?? m[2]);
   return out;
 }
+
+const isExternal = (href) => /^[a-z][a-z0-9+.-]*:|^\/\//i.test(href);
 
 const tops = new Map();
 function gitTop(dir) {
@@ -217,8 +157,6 @@ const decode = (s) => {
 
 // → null when the link is fine, else the reason
 function check(file, href) {
-  if (!href || /^[a-z][a-z0-9+.-]*:/i.test(href) || href.startsWith("//"))
-    return null;
   const hash = href.indexOf("#");
   const rawPath = (hash < 0 ? href : href.slice(0, hash)).replace(/\?.*$/, "");
   const rawFrag = hash < 0 ? undefined : href.slice(hash + 1);
@@ -233,21 +171,9 @@ function check(file, href) {
       return `repository-root link ${href} but ${file} is not in a git repository`;
     target = join(top, p);
   } else target = resolve(dirname(file), p);
-  if (!existsSync(target)) {
-    // a literal "%20" in a file name
-    const literal =
-      rawPath && !rawPath.startsWith("/")
-        ? resolve(dirname(file), rawPath)
-        : null;
-    if (!literal || !existsSync(literal)) return `missing file ${href}`;
-    target = literal;
-  }
-  if (
-    frag !== undefined &&
-    frag !== "" &&
-    statSync(target).isFile() &&
-    target.endsWith(".md")
-  ) {
+  const st = statSync(target, { throwIfNoEntry: false });
+  if (!st) return `missing file ${href}`;
+  if (frag && st.isFile() && target.endsWith(".md")) {
     if (/^L\d+(-L\d+)?$/.test(frag)) return null;
     if (!anchors(target).has(frag)) return `missing anchor ${href}`;
   }
@@ -271,8 +197,7 @@ for (const f of files) {
   }
   for (const [i, line] of outsideFences(text.split("\n"))) {
     for (const href of linkDests(line)) {
-      if (!href || /^[a-z][a-z0-9+.-]*:/i.test(href) || href.startsWith("//"))
-        continue;
+      if (!href || isExternal(href)) continue;
       checked++;
       const why = check(f, href);
       if (why) {

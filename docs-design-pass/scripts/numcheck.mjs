@@ -7,17 +7,18 @@
 //   node numcheck.mjs <base-ref> <doc.md>...
 //
 // Numbers keep their unit, attached ("8.3s") or after a space ("8.3 s"; the same
-// number either way), so a unit change reads as a changed number. Units: % × x k M s ms
-// µs min h KB MB GB TB KiB MiB GiB TiB Mbps Gbps. A unit only counts when no letter
-// follows it ("3 sources" is the number 3). Trailing punctuation is dropped, so moving a
-// comma or a period does not read as a new number.
+// number either way), so a unit change reads as a changed number. The units are
+// WORD_UNITS and SYMBOL_UNITS below; a symbol unit must be attached. A unit only counts
+// when no letter follows it ("3 sources" is the number 3). A minus sign counts only when
+// no letter or digit precedes it ("10-20" is 10 and 20). Trailing punctuation is dropped,
+// so moving a comma or a period does not read as a new number.
 //
 // Exit codes: 0 no added numbers, 1 added numbers, 2 the check could not run (bad ref,
 // not a git repository, an unreadable file). A file that does not exist in the base ref
 // is new: every number in it is new.
 import { spawnSync } from "node:child_process";
-import { readFileSync, realpathSync } from "node:fs";
-import { basename, dirname, join, relative, resolve, sep } from "node:path";
+import { readFileSync } from "node:fs";
+import { basename, dirname, resolve } from "node:path";
 
 const die = (msg) => {
   console.error(msg);
@@ -32,16 +33,15 @@ const WORD_UNITS = "Gbps|Mbps|GiB|MiB|KiB|TiB|GB|MB|KB|TB|min|ms|µs|μs|s|h";
 const SYMBOL_UNITS = "%|×|x|k|M";
 const SPACE = "[ \\t\\u00a0\\u202f]";
 const NUMBER = new RegExp(
-  `[−-]?\\d(?:[\\d,]*\\d)?(?:\\.\\d+)?` +
-    `(?:(?:${SPACE}*(?:${WORD_UNITS})|(?:${SYMBOL_UNITS}|${WORD_UNITS}))(?![\\p{L}\\p{N}]))?`,
+  `(?<n>(?:(?<![\\p{L}\\p{N}])[−-])?\\d(?:[\\d,]*\\d)?(?:\\.\\d+)?)` +
+    `(?:(?<u>${SPACE}*(?:${WORD_UNITS})|${SYMBOL_UNITS})(?![\\p{L}\\p{N}]))?`,
   "gu",
 );
 const SPACES = new RegExp(`${SPACE}+`, "gu");
 const nums = (s) =>
-  (s.match(NUMBER) || [])
-    .filter((n) => /\d/.test(n))
-    .map((n) => n.replace(SPACES, ""));
-const bag = (a) => a.reduce((m, n) => m.set(n, (m.get(n) || 0) + 1), new Map());
+  [...s.matchAll(NUMBER)].map(
+    ({ groups: { n, u } }) => n + (u ?? "").replace(SPACES, ""),
+  );
 
 const git = (args, cwd, what = "") => {
   const r = spawnSync("git", args, {
@@ -57,6 +57,14 @@ const git = (args, cwd, what = "") => {
   return r.stdout;
 };
 
+const dirOf = (f) => dirname(resolve(f));
+// verified once, before any file is read (an option-shaped ref fails here too)
+git(
+  ["rev-parse", "--verify", "--end-of-options", `${base}^{commit}`],
+  dirOf(files[0]),
+  `bad base ref "${base}": `,
+);
+
 let bad = 0;
 for (const f of files) {
   let current;
@@ -65,31 +73,21 @@ for (const f of files) {
   } catch (e) {
     die(`${f}: ${e.message}`);
   }
-  const dir = realpathSync(dirname(resolve(f)));
-  const top = realpathSync(git(["rev-parse", "--show-toplevel"], dir).trim());
-  const rel = relative(top, join(dir, basename(f)));
-  const path = rel.split(sep).join("/");
-  git(
-    ["rev-parse", "--verify", "--end-of-options", `${base}^{commit}`],
-    top,
-    `bad base ref "${base}": `,
-  );
+  // git runs in the file's directory; ./<name> is relative to it
+  const cwd = dirOf(f);
+  const path = `./${basename(f)}`;
   // ls-tree exits 0 with no output for a path the ref does not contain: that is a new file
-  const entry = git(["ls-tree", base, "--", path], top).trim();
+  const entry = git(["ls-tree", base, "--", path], cwd).trim();
   let old = "";
   if (!entry) console.log(`${f}: not in ${base}; every number is new`);
   else if (!/^\d+ blob /.test(entry))
     die(`${f}: ${base}:${path} is not a regular file`);
-  else old = git(["show", `${base}:${path}`], top);
-  const before = bag(nums(old));
-  const after = bag(nums(current));
-  const keys = new Set([...before.keys(), ...after.keys()]);
-  const added = [...keys].filter(
-    (k) => (after.get(k) || 0) > (before.get(k) || 0),
-  );
-  const removed = [...keys].filter(
-    (k) => (after.get(k) || 0) < (before.get(k) || 0),
-  );
+  else old = git(["show", `${base}:${path}`], cwd);
+  const delta = new Map();
+  for (const n of nums(old)) delta.set(n, (delta.get(n) ?? 0) - 1);
+  for (const n of nums(current)) delta.set(n, (delta.get(n) ?? 0) + 1);
+  const added = [...delta].filter(([, d]) => d > 0).map(([n]) => n);
+  const removed = [...delta].filter(([, d]) => d < 0).map(([n]) => n);
   if (added.length) {
     bad++;
     console.log(`${f}: ADDED ${added.join(" ")}`);

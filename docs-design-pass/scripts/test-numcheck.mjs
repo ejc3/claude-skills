@@ -11,24 +11,13 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import test from "node:test";
 
 const SCRIPT = fileURLToPath(new URL("./numcheck.mjs", import.meta.url));
 const tmp = mkdtempSync(join(tmpdir(), "numcheck-test-"));
-
-let failed = 0;
-let ran = 0;
-const test = (name, fn) => {
-  ran++;
-  try {
-    fn();
-    console.log(`ok   ${name}`);
-  } catch (e) {
-    failed++;
-    console.log(`FAIL ${name}\n     ${String(e.message).split("\n")[0]}`);
-  }
-};
+test.after(() => rmSync(tmp, { recursive: true, force: true }));
 
 const git = (cwd, ...args) => {
   const r = spawnSync(
@@ -48,27 +37,48 @@ const git = (cwd, ...args) => {
   return r.stdout;
 };
 let n = 0;
-// a repository whose HEAD holds `files`; returns its directory
-const repo = (files) => {
-  const dir = join(tmp, `repo${n++}`);
-  mkdirSync(dir);
-  git(dir, "init", "-q");
+const write = (dir, files) => {
   for (const [name, body] of Object.entries(files)) {
-    mkdirSync(join(dir, name, ".."), { recursive: true });
+    mkdirSync(dirname(join(dir, name)), { recursive: true });
     writeFileSync(join(dir, name), body);
   }
+};
+// a fresh directory holding `files`
+const plain = (files = {}) => {
+  const dir = join(tmp, `dir${n++}`);
+  mkdirSync(dir);
+  write(dir, files);
+  return dir;
+};
+// a repository whose HEAD holds `files`, with `worktree` written over them uncommitted
+const repo = (files, worktree = {}) => {
+  const dir = plain();
+  git(dir, "init", "-q");
+  write(dir, files);
   git(dir, "add", "-A");
   git(dir, "commit", "-q", "-m", "base");
+  write(dir, worktree);
   return dir;
 };
 const run = (cwd, ...args) =>
   spawnSync(process.execPath, [SCRIPT, ...args], { cwd, encoding: "utf8" });
-// numcheck HEAD doc.md after rewriting doc.md to `after`
-const edit = (before, after) => {
-  const dir = repo({ "doc.md": before });
-  writeFileSync(join(dir, "doc.md"), after);
-  return run(dir, "HEAD", "doc.md");
+// run the CLI through a symlink to the script, as an installed skill is
+const viaLink = (cwd, ...args) => {
+  const link = join(tmp, `numcheck-link${n++}.mjs`);
+  symlinkSync(SCRIPT, link);
+  return spawnSync(process.execPath, [link, ...args], {
+    cwd,
+    encoding: "utf8",
+  });
 };
+const expectExit = (r, status, stdout, stderr) => {
+  assert.equal(r.status, status, r.stdout + r.stderr);
+  if (stdout) assert.match(r.stdout, stdout);
+  if (stderr) assert.match(r.stderr, stderr);
+};
+// numcheck HEAD doc.md after rewriting doc.md to `after`
+const edit = (before, after) =>
+  run(repo({ "doc.md": before }, { "doc.md": after }), "HEAD", "doc.md");
 
 // ---- baseline behaviour ---------------------------------------------------------------------
 
@@ -145,19 +155,14 @@ test("F8 a bad base ref exits 2 with git's error, not 'every number is new'", ()
   assert.match(r.stderr, /fatal/);
 });
 test("F8 outside a git repository exits 2", () => {
-  const dir = join(tmp, "plain");
-  mkdirSync(dir);
-  writeFileSync(join(dir, "doc.md"), "took 8s\n");
-  const r = run(dir, "HEAD", "doc.md");
+  const r = run(plain({ "doc.md": "took 8s\n" }), "HEAD", "doc.md");
   assert.equal(r.status, 2, r.stdout + r.stderr);
   assert.doesNotMatch(r.stdout, /every number is new/);
   assert.match(r.stderr, /not a git repository/);
 });
 test("F8 a file in another directory that is not in a repository exits 2", () => {
   const dir = repo({ "doc.md": "took 8s\n" });
-  const other = join(tmp, "elsewhere");
-  mkdirSync(other);
-  writeFileSync(join(other, "x.md"), "8s\n");
+  const other = plain({ "x.md": "8s\n" });
   const r = run(dir, "HEAD", join(other, "x.md"));
   assert.equal(r.status, 2, r.stdout + r.stderr);
   assert.match(r.stderr, /not a git repository/);
@@ -168,22 +173,25 @@ test("F8 a file missing on disk exits 2", () => {
   assert.equal(r.status, 2, r.stdout + r.stderr);
 });
 test("F8 a path absent from the base ref is a new file: every number is new", () => {
-  const dir = repo({ "doc.md": "took 8s\n" });
-  writeFileSync(join(dir, "new.md"), "took 9s\n");
+  const dir = repo({ "doc.md": "took 8s\n" }, { "new.md": "took 9s\n" });
   const r = run(dir, "HEAD", "new.md");
   assert.equal(r.status, 1, r.stdout + r.stderr);
   assert.match(r.stdout, /not in HEAD; every number is new/);
   assert.match(r.stdout, /ADDED 9s/);
 });
 test("F8 a new file without numbers exits 0", () => {
-  const dir = repo({ "doc.md": "took 8s\n" });
-  writeFileSync(join(dir, "new.md"), "no figures here\n");
+  const dir = repo(
+    { "doc.md": "took 8s\n" },
+    { "new.md": "no figures here\n" },
+  );
   const r = run(dir, "HEAD", "new.md");
   assert.equal(r.status, 0, r.stdout + r.stderr);
 });
 test("F8 a relative path from a subdirectory resolves against the repository", () => {
-  const dir = repo({ "docs/a.md": "took 8s on 64 cores\n" });
-  writeFileSync(join(dir, "docs/a.md"), "took 8s on 64 cores, reworded\n");
+  const dir = repo(
+    { "docs/a.md": "took 8s on 64 cores\n" },
+    { "docs/a.md": "took 8s on 64 cores, reworded\n" },
+  );
   const r = run(join(dir, "docs"), "HEAD", "a.md");
   assert.equal(r.status, 0, r.stdout + r.stderr);
   assert.match(r.stdout, /unchanged numbers/);
@@ -194,17 +202,74 @@ test("F8 an absolute path works from any directory", () => {
   assert.equal(r.status, 0, r.stdout + r.stderr);
 });
 
+// ---- number tokens ----------------------------------------------------------------------------------------------
+
+test("a range reads as two numbers, not a number and a negative (10-20)", () => {
+  const r = edit("took 20 and 10 cores\n", "took 10-20 cores\n");
+  assert.equal(r.status, 0, r.stdout + r.stderr);
+  assert.match(r.stdout, /unchanged numbers/);
+});
+test("a unicode minus after a digit is also a range, not a sign", () => {
+  const r = edit("from 5 to 3\n", "5\u22123\n");
+  assert.equal(r.status, 0, r.stdout + r.stderr);
+});
+test("a minus sign after a space or at the start still marks a negative number", () => {
+  const r = edit("a drop of 4 points\n", "a change of -4 points\n");
+  assert.equal(r.status, 1);
+  assert.match(r.stdout, /ADDED -4/);
+  assert.equal(edit("-5 and 5\n", "5 and -5\n").status, 0);
+});
+test("a number glued to letters is still a number (v2, x86)", () => {
+  const r = edit("on v2\n", "on v2 and x86\n");
+  assert.equal(r.status, 1);
+  assert.match(r.stdout, /ADDED 86/);
+});
+test("a list is not merged: 1,000 is one number, 1, 000 is two", () => {
+  const r = edit("1,000\n", "1, 000\n");
+  assert.equal(r.status, 1);
+  assert.match(r.stdout, /ADDED 1 000/);
+});
+test("a symbol unit must be attached (5% vs 5 %)", () => {
+  const r = edit("5%\n", "5 %\n");
+  assert.equal(r.status, 1, r.stdout + r.stderr);
+});
+
+// ---- the base ref is verified once, before any file ----------------------------------------------------------------
+
+test("an option-shaped base ref is refused with exit 2", () => {
+  const dir = repo({ "doc.md": "took 8s\n" });
+  expectExit(run(dir, "-x", "doc.md"), 2, undefined, /bad base ref/);
+});
+test("a bad base ref exits 2 before an unreadable file is reported", () => {
+  const dir = repo({ "doc.md": "took 8s\n" });
+  expectExit(run(dir, "no-such-ref", "gone.md"), 2, undefined, /no-such-ref/);
+});
+test("several files are each compared against the base", () => {
+  const dir = repo(
+    { "a.md": "8s\n", "b.md": "9s\n" },
+    { "a.md": "8s 64\n", "b.md": "9s\n" },
+  );
+  const r = run(dir, "HEAD", "a.md", "b.md");
+  expectExit(r, 1, /a\.md: ADDED 64/);
+  assert.match(r.stdout, /b\.md: unchanged numbers/);
+});
+test("a file in a directory absent from the base ref is new", () => {
+  const dir = repo({ "doc.md": "8s\n" }, { "fresh/n.md": "5s\n" });
+  expectExit(
+    run(dir, "HEAD", "fresh/n.md"),
+    1,
+    /not in HEAD; every number is new/,
+  );
+});
+
 // ---- the CLI through a symlink -------------------------------------------------------------------------------------
 
 test("CLI runs through a symlink", () => {
-  const dir = repo({ "doc.md": "took 8s\n" });
-  writeFileSync(join(dir, "doc.md"), "took 8s on 64 cores\n");
-  const link = join(tmp, "numcheck-link.mjs");
-  symlinkSync(SCRIPT, link);
-  const r = spawnSync(process.execPath, [link, "HEAD", "doc.md"], {
-    cwd: dir,
-    encoding: "utf8",
-  });
+  const dir = repo(
+    { "doc.md": "took 8s\n" },
+    { "doc.md": "took 8s on 64 cores\n" },
+  );
+  const r = viaLink(dir, "HEAD", "doc.md");
   assert.equal(r.status, 1, r.stdout + r.stderr);
   assert.match(r.stdout, /ADDED 64/);
 });
@@ -213,7 +278,3 @@ test("CLI with too few arguments exits 2", () => {
   assert.equal(r.status, 2);
   assert.match(r.stderr, /usage/);
 });
-
-rmSync(tmp, { recursive: true, force: true });
-console.log(`\n${ran - failed}/${ran} passed`);
-process.exit(failed ? 1 : 0);

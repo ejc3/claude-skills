@@ -7,25 +7,36 @@ import { mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
+import test from "node:test";
 
 const SCRIPT = fileURLToPath(new URL("./svg-audit.mjs", import.meta.url));
 const { auditSvg } = await import(SCRIPT);
 const tmp = mkdtempSync(join(tmpdir(), "svg-audit-test-"));
+test.after(() => rmSync(tmp, { recursive: true, force: true }));
 
-let failed = 0;
-let ran = 0;
-const test = (name, fn) => {
-  ran++;
-  try {
-    fn();
-    console.log(`ok   ${name}`);
-  } catch (e) {
-    failed++;
-    console.log(`FAIL ${name}\n     ${String(e.message).split("\n")[0]}`);
-  }
-};
 const cli = (...args) =>
   spawnSync(process.execPath, [SCRIPT, ...args], { encoding: "utf8" });
+// run the CLI through a symlink to the script, as an installed skill is
+let links = 0;
+const viaLink = (...args) => {
+  const link = join(tmp, `audit-link${links++}.mjs`);
+  symlinkSync(SCRIPT, link);
+  return spawnSync(process.execPath, [link, ...args], { encoding: "utf8" });
+};
+// write a chart file into the temp directory; returns its path
+const chartFile = (name, svgText) => {
+  const f = join(tmp, name);
+  writeFileSync(f, svgText);
+  return f;
+};
+const expectExit = (r, status, stdout) => {
+  assert.equal(
+    r.status,
+    status,
+    `exit ${r.status}, stdout ${JSON.stringify(r.stdout)}, stderr ${JSON.stringify(r.stderr)}`,
+  );
+  if (stdout) assert.match(r.stdout, stdout);
+};
 // every test but the F5 ones passes the floors explicitly, so one missing default
 // does not mask the other findings when the suite runs against an older script
 const audit = (svgText, opt) =>
@@ -67,27 +78,16 @@ test("control: a clean chart has no issues and no notes", () => {
 // ---- finding 1: the CLI guard compared the symlink with the target ----------------------------
 
 test("F1 CLI runs through a symlink and fails a bad chart", () => {
-  const bad = join(tmp, "f1-bad.svg");
-  writeFileSync(bad, svg({ body: text("pale", `fill="#cccccc"`) }));
-  const link = join(tmp, "audit-link.mjs");
-  symlinkSync(SCRIPT, link);
-  const r = spawnSync(process.execPath, [link, bad], { encoding: "utf8" });
-  assert.equal(
-    r.status,
-    1,
-    `exit ${r.status}, stdout ${JSON.stringify(r.stdout)}`,
+  const bad = chartFile(
+    "f1-bad.svg",
+    svg({ body: text("pale", `fill="#cccccc"`) }),
   );
-  assert.match(r.stdout, /FAIL/);
+  expectExit(viaLink(bad), 1, /FAIL/);
 });
 
 test("F1 CLI through a symlink passes a clean chart with output", () => {
-  const good = join(tmp, "f1-good.svg");
-  writeFileSync(good, svg({ body: text("fine") }));
-  const link = join(tmp, "audit-link2.mjs");
-  symlinkSync(SCRIPT, link);
-  const r = spawnSync(process.execPath, [link, good], { encoding: "utf8" });
-  assert.equal(r.status, 0);
-  assert.match(r.stdout, /^ok /);
+  const good = chartFile("f1-good.svg", svg({ body: text("fine") }));
+  expectExit(viaLink(good), 0, /^ok /);
 });
 
 // ---- finding 2: the dark rules parser -----------------------------------------------------
@@ -162,6 +162,19 @@ test("F2 another @media block is reported", () => {
   );
 });
 
+test("F2 an @import is reported, alone or ahead of a rule", () => {
+  has(
+    issuesOf(svg({ style: `@import url(x.css);`, body: text("x") })),
+    /unsupported "@import url\(x\.css\);"/,
+  );
+  has(
+    issuesOf(
+      svg({ style: `@import url(x.css); text{fill:#000}`, body: text("x") }),
+    ),
+    /unsupported "@import url\(x\.css\); text"/,
+  );
+});
+
 // ---- finding 3: background detection and canvas size ----------------------------------------------
 
 test("F3 a background rect with x=0 y=0 is the page", () => {
@@ -207,7 +220,7 @@ test("F3 no background rect: white and #0d1117 pages are assumed and reported", 
     }),
   );
   has([...out], /^light: "x" #777777 at 4\.48:1/);
-  has([...out], /^dark: "y" \(default black\)/);
+  has([...out], /^dark: "y" black at/);
   assert.ok(
     out.notes.some((n) => /no background rect/.test(n)),
     JSON.stringify(out.notes),
@@ -226,13 +239,43 @@ test("F4 font-size with px units is checked", () => {
     /"tiny" is 8px/,
   );
 });
-test("F4 font-size in pt and em is converted", () => {
-  const body =
-    `<text x="10" y="20" font-size="6pt" fill="#1c2330">pt</text>` +
-    `<g font-size="10"><text x="10" y="40" font-size="0.5em" fill="#1c2330">em</text></g>`;
+test("F4 font-size in any unit but px, and keywords, are reported as unreadable", () => {
+  const sizes = ["6pt", "0.5em", "50%", "small", "1rem"];
+  const body = sizes
+    .map(
+      (v, i) =>
+        `<text x="10" y="${20 + i * 20}" font-size="${v}" fill="#1c2330">u${i}</text>`,
+    )
+    .join("");
   const out = issuesOf(svg({ body }));
-  has(out, /"pt" is 8px/);
-  has(out, /"em" is 5px/);
+  sizes.forEach((v, i) =>
+    has(
+      out,
+      new RegExp(
+        `^"u${i}" has a font-size the audit cannot read \\(${v.replace(".", "\\.")}\\)`,
+      ),
+    ),
+  );
+});
+test("F4 a unitless font-size and a style-attribute px size are read", () => {
+  const body =
+    `<text x="10" y="20" font-size="7.5" fill="#1c2330">bare</text>` +
+    `<text x="10" y="40" style="font-size:6px" fill="#1c2330">css</text>`;
+  const out = issuesOf(svg({ body }));
+  has(out, /"bare" is 7\.5px/);
+  has(out, /"css" is 6px/);
+});
+test("F4 a dark rule that shrinks the font-size is audited in the dark theme", () => {
+  const style = `@media (prefers-color-scheme: dark){rect[fill="#ffffff"]{fill:#0d1117}text[fill="#1c2330"]{fill:#e2e7ec;font-size:7px}}`;
+  const out = issuesOf(svg({ style, body: text("x") }));
+  assert.deepEqual(out, [`dark: "x" is 7px (floor 9px)`]);
+});
+test("F4 a dark rule with an unreadable font-size is reported", () => {
+  const style = `@media (prefers-color-scheme: dark){rect[fill="#ffffff"]{fill:#0d1117}text[fill="#1c2330"]{fill:#e2e7ec;font-size:1em}}`;
+  has(
+    issuesOf(svg({ style, body: text("x") })),
+    /^dark: "x" has a font-size the audit cannot read \(1em\)/,
+  );
 });
 test("F4 an unreadable font-size is reported, not passed", () => {
   has(
@@ -274,7 +317,7 @@ test("F4 <tspan> text is audited for size and contrast", () => {
 test("F4 text without a fill is black in both themes, so it fails on the dark page", () => {
   const out = issuesOf(svg({ body: text("bare", "") }));
   assert.ok(!out.some((i) => /^light:/.test(i)), JSON.stringify(out));
-  has(out, /^dark: "bare" \(default black\)/);
+  has(out, /^dark: "bare" black at/);
 });
 test("F4 fill:none text draws nothing and is not flagged", () => {
   assert.deepEqual(issuesOf(svg({ body: text("ghost", `fill="none"`) })), []);
@@ -430,43 +473,83 @@ test("F6 a solid bar is checked and a thin stripe is not", () => {
   );
 });
 
+// ---- finding 7: SVG's initial values (an unset fill is black) --------------------------------------
+
+test("F7 a rect with no fill is a black box: text over it is measured against black", () => {
+  const body = `<rect x="5" y="5" width="100" height="40"/>${text("on black", `fill="#1c2330"`, 10, 30)}`;
+  has(issuesOf(svg({ body })), /^light: "on black" #1c2330 at/);
+});
+test("F7 light text on a rect with no fill passes; the black bar itself fails on the dark page", () => {
+  const body = `<rect x="5" y="5" width="100" height="40"/>${text("on black", `fill="#ffffff"`, 10, 30)}`;
+  assert.deepEqual(issuesOf(svg({ body })), [
+    "dark: rect fill black at 1.11:1 (marks need 3:1)",
+  ]);
+});
+test("F7 a shape with no fill is a black mark: it fails on the dark page", () => {
+  const out = marks(`<circle cx="20" cy="70" r="4"/>`);
+  has(out, /^dark: circle fill black at/);
+  assert.ok(!out.some((i) => /^light:/.test(i)), JSON.stringify(out));
+});
+test("F7 a line has no fill channel and an explicit fill:none shape is not a mark", () => {
+  assert.deepEqual(
+    marks(
+      `<line x1="0" y1="50" x2="100" y2="50" stroke="#777777"/><circle cx="20" cy="70" r="4" fill="none" stroke="#777777"/>`,
+    ),
+    [],
+  );
+});
+test("F7 an inherited fill overrides the initial value", () => {
+  assert.deepEqual(
+    marks(`<g fill="none"><circle cx="20" cy="70" r="4"/></g>`),
+    [],
+  );
+});
+
 // ---- CLI -----------------------------------------------------------------------------------------------------------
 
 test("CLI --grid-color changes the hairline exemption", () => {
-  const f = join(tmp, "grid.svg");
-  writeFileSync(
-    f,
+  const f = chartFile(
+    "grid.svg",
     svg({ body: `<line x1="0" y1="50" x2="100" y2="50" stroke="#f0f0f0"/>` }),
   );
-  assert.equal(cli(f).status, 1);
-  assert.equal(cli("--grid-color", "#f0f0f0", f).status, 0);
+  expectExit(cli(f), 1);
+  expectExit(cli("--grid-color", "#f0f0f0", f), 0);
+  expectExit(cli("--grid-color=#f0f0f0", f), 0);
+});
+test("CLI a bad --grid-color is a usage error naming the problem", () => {
+  const f = chartFile("grid2.svg", svg({}));
+  const r = cli("--grid-color", "blue", f);
+  expectExit(r, 2);
+  assert.match(r.stderr, /gridColor must be a colour/);
+  assert.match(r.stderr, /usage:/);
 });
 test("CLI --min-text sets the floor and a non-number is a usage error", () => {
-  const f = join(tmp, "floor.svg");
-  writeFileSync(
-    f,
+  const f = chartFile(
+    "floor.svg",
     svg({ body: `<text x="10" y="20" font-size="10" fill="#1c2330">t</text>` }),
   );
-  assert.equal(cli(f).status, 0);
-  assert.equal(cli("--min-text", "11", f).status, 1);
-  assert.equal(cli("--min-text", "abc", f).status, 2);
+  expectExit(cli(f), 0);
+  expectExit(cli("--min-text", "11", f), 1);
+  expectExit(cli("--min-text=11", f), 1);
+  expectExit(cli("--min-text", "abc", f), 2);
+  expectExit(cli("--min-text", "", f), 2);
+  expectExit(cli("--min-box-text", "-1", f), 2);
 });
-test("CLI exits 2 with no files, an unknown flag, or an unreadable file", () => {
-  assert.equal(cli().status, 2);
-  assert.equal(cli("--bogus", "x.svg").status, 2);
-  assert.equal(cli(join(tmp, "missing.svg")).status, 2);
+test("CLI exits 2 with no files, an unknown flag, a missing value or an unreadable file", () => {
+  expectExit(cli(), 2);
+  expectExit(cli("--bogus", "x.svg"), 2);
+  expectExit(cli("x.svg", "--min-text"), 2);
+  expectExit(cli(join(tmp, "missing.svg")), 2);
+});
+test("CLI -h and --help print usage and exit 0", () => {
+  expectExit(cli("-h"), 0, /usage:/);
+  expectExit(cli("--help"), 0, /usage:/);
 });
 test("CLI prints notes next to an ok result", () => {
-  const f = join(tmp, "nobg.svg");
-  writeFileSync(
-    f,
+  const f = chartFile(
+    "nobg.svg",
     svg({ bg: "", style: "", body: text("y", `fill="#000000"`) }),
   );
-  const r = cli(f);
-  assert.equal(r.status, 1); // black text on the assumed #0d1117 dark page
-  assert.match(r.stdout, /note: no background rect/);
+  // black text on the assumed #0d1117 dark page
+  expectExit(cli(f), 1, /note: no background rect/);
 });
-
-rmSync(tmp, { recursive: true, force: true });
-console.log(`\n${ran - failed}/${ran} passed`);
-process.exit(failed ? 1 : 0);

@@ -1,6 +1,6 @@
 ---
 name: docs-design-pass
-description: Raise a repository's charts, figures and prose to the standard of a well-made technical paper for a sophisticated reader, without changing a single measured value. Design counsel first, then a shared style kit, then stacked PRs by area; every rasterized chart gets a phone-readable text alternative generated from the same data; prose is cut to one statement per finding with a number-preservation check; each PR goes through parallel independent review (code review, codex, a rendering visual/data-fidelity reviewer, a cross-doc concision editor), closure passes on the repairs, a red test for every accepted defect, and a merge gate that requires bot reviews of the head and an adjudication on every finding. Use when asked to up-level, restyle or polish graphics, charts, diagrams or docs, to make them look good for a technical audience, to cut useless words, or to make charts readable on mobile.
+description: Use when asked to up-level, restyle or polish a repository's charts, figures, diagrams or docs for a technical audience, to cut useless words, or to make charts readable on mobile. Raises them to the standard of a technical paper without changing a measured value.
 ---
 
 # Docs design pass
@@ -19,15 +19,9 @@ Push authority is not merge authority.
   about 390px). Read the generators, the shared style module if there is one,
   and the CI that checks charts.
 - Read the docs' openings and longest sections; count words per doc.
-- Write the design counsel as a short list of what holds each chart back,
-  concretely: saturated fills where a tint would do, the headline in the wrong
-  place (a ratio where the measured value belongs), prose inside the figure,
-  boxes inside boxes, single-series legends, colliding axis labels, a log axis
-  drawn as bars from a floor, colour that implies a winner on a non-ranking
-  comparison, inconsistent type between generators.
-- For prose: stacked parentheticals, em dashes as a general connector, the same
-  caveat in three places, captions that restate numbers, findings retold in
-  several docs.
+- Write the design counsel as a short list of what holds each chart back
+  against the chart contract (§3) and each doc against the prose contract (§5),
+  concretely, one finding per defect.
 - Name the decisions that are the owner's (e.g. value-first vs ratio-first
   cells; redraw or drop a figure; which docs are in scope) with a
   recommendation for each. Then plan the stack.
@@ -42,11 +36,15 @@ Push authority is not merge authority.
 4. **Prose**, split by doc group so each PR is reviewable; branched from main,
    they do not depend on the chart PRs.
 
-One driver per git worktree. Stacked branches are rebased with
-`git rebase --onto <new-parent> <old-parent> <branch>` when a parent is
-rewritten; generated outputs (SVG, PNG, doc blocks) are resolved by re-rendering,
-never by hand-merging. Figure captions, image embeds and generated blocks belong
-to the chart PRs; prose PRs leave them alone, so the two never collide.
+One driver per git worktree. Stacked branches are rebased onto the new parent
+when a parent is rewritten (the command is under Files); generated outputs
+(SVG, PNG, doc blocks) are resolved by re-rendering, never by hand-merging.
+Figure captions, image embeds and generated blocks belong to the chart PRs;
+prose PRs leave them alone, so the two never collide.
+
+A CI job that commits regenerated files back to main conflicts with every open
+PR that touches them, and GitHub then reports "no checks". A checkless PR is
+conflicting until proven otherwise; rebase it, keeping the PR's render.
 
 ## 3. The chart contract
 
@@ -62,8 +60,8 @@ to the chart PRs; prose PRs leave them alone, so the two never collide.
   not fit at the floor fails the generator instead of shrinking.
 - **Contrast in both themes.** Text 4.5:1 against what is drawn behind it,
   marks 3:1 against the page, with the SVG's own dark-mode rules applied.
-  `<skill-dir>/scripts/svg-audit.mjs` checks this; wire it into the repo's
-  tests over every committed SVG so a new chart cannot opt out.
+  The legibility audit (svg-audit) checks this; wire it into the repo's tests
+  over every committed SVG so a new chart cannot opt out.
 - **Colour means one thing.** A series colour must not reuse a heat-ramp hue
   (a reader who knows the heat charts reads it as ×100) or another tool's
   identity colour. A non-ranking comparison gets a neutral tint, never green and
@@ -76,7 +74,9 @@ to the chart PRs; prose PRs leave them alone, so the two never collide.
   denominator comes from the comparison axis actually used, figure numbers come
   from the doc. Missing fields throw; a stale dataset must not render a
   plausible cell.
-- **The legend lists only the states the chart shows.**
+- **The legend lists only the states the chart shows.** No boxes inside boxes,
+  prose inside the figure, single-series legends, colliding axis labels, or a
+  log axis drawn as bars from a floor.
 
 ## 4. A text alternative for anything rasterized
 
@@ -104,12 +104,14 @@ its markers fails the generator.
   A caveat is stated once, where it applies; a limitation is never dropped.
 - Fairness: where a non-recommended option wins a row, every summary that keeps
   the comparison keeps that win.
-- No number changes value. `node <skill-dir>/scripts/numcheck.mjs <base> <doc>...`
-  fails on any added number and lists removed ones; each removal must be a
-  repeat the owning doc still states, and each addition (e.g. a renamed `12x` → `12×`, or a number
-  moved in from its owning doc) is listed with its source field.
-- `node <skill-dir>/scripts/linkcheck.mjs <doc>...` on every doc, with GitHub's
-  slug rules.
+- No number changes value. The number-preservation check (numcheck) fails on
+  any added number and lists removed ones; each removal must be a repeat the
+  owning doc still states, and each addition (e.g. a renamed `12x` → `12×`, or a
+  number moved in from its owning doc) is listed with its source field.
+- The link check (linkcheck) runs on every doc, with GitHub's slug rules.
+- Cut stacked parentheticals, em dashes as a general connector, the same caveat
+  in three places, captions that restate numbers, and findings retold in
+  several docs.
 - Splitting sentences adds words. If the word count did not fall, the cuts are
   not done; the cross-doc concision review (below) is where the savings are.
 
@@ -118,11 +120,10 @@ its markers fails the generator.
 1. **Candidate pass on one frozen commit**, all reviewers in parallel, each
    returning one complete report:
    - `/code-review` on the diff.
-   - `codex exec -s read-only` with the PR's contract and an explicit list of
+   - `codex` in read-only mode with the PR's contract and an explicit list of
      what to hunt (dropped or changed values vs the old SVG, weakened
-     assertions, caveats lost, unbacked claims, CI gate gaps). Run it in the
-     background with stdin closed (`codex exec ... </dev/null > log 2>&1`);
-     without `</dev/null` it can wait on stdin indefinitely.
+     assertions, caveats lost, unbacked claims, CI gate gaps), run in the
+     background with stdin closed (see Files).
    - A **visual and data-fidelity reviewer** agent that rasterizes old and new
      in light, dark and phone width, lists every number in old and new SVGs,
      checks each block against its SVG, and judges the design as an editor of a
@@ -132,11 +133,14 @@ its markers fails the generator.
      retold across docs and returns exact replacements with word savings.
    Deduplicate, classify each finding (blocks this PR / stacked follow-up),
    and fix the batch in one repair.
-2. **A red test for every accepted defect**, observed failing on the
-   pre-repair code: a kit self-test, an SVG audit over every committed chart, a
-   source-level assertion where no runtime test fits. Mutate the fix away and
-   watch the test fail. Documentation findings get a corrected text checked
-   against the source instead.
+2. **What closes a finding** (the one definition; the merge gate reuses it).
+   A defect is closed by a red test observed failing on the pre-repair code: a
+   kit self-test, an SVG audit over every committed chart, a source-level
+   assertion where no runtime test fits. Mutate the fix away and watch the test
+   fail. A documentation, naming or style finding is closed by the corrected
+   text, checked against its source. A claim the data refutes is closed by the
+   evidence (a bot quoting a stale external limit gets the live page quoted
+   back).
 3. **Closure pass** on the repair delta: a targeted codex review of exactly the
    repair, then the full render/test sequence on the exact head.
 
@@ -155,29 +159,22 @@ every caller.
   names). A hit blocks the push.
 - The PR text covers every commit, lists each content correction with its
   source, and states what was reviewed and how.
-- A CI job that commits regenerated files back to main conflicts with every
-  open PR that touches them, and GitHub then reports "no checks". A checkless PR
-  is conflicting until proven otherwise; rebase it, keeping the PR's render.
 
 ## 8. The merge gate
 
 No PR merges until every finding is adjudicated and the bots have reviewed the
 exact head:
 
-- Request `@codex review` and `@coderabbitai review` on the head. A review of an
-  earlier head covers nothing; re-request after every push. A green CodeRabbit
-  status can mean "review skipped"; read its comment.
-- Answer every finding with a reply that opens with one of:
-  `RED-VERIFIED: <test>` (a defect, closed by a test watched failing without the
-  fix), `NOT-A-DEFECT: <reason>` (docs, naming, style; give the corrected text
-  and its source), or `DISAGREE: <evidence>` (a claim rejected with data; e.g. a
-  bot quoting a stale external limit gets the live page quoted back). Resolve
-  the thread after answering.
+- Request a `@codex` review and a `@coderabbitai` review on the head. A review
+  of an earlier head covers nothing; re-request after every push. A green
+  CodeRabbit status can mean "review skipped"; read its comment.
+- Answer every finding with a reply that opens with `RED-VERIFIED: <test>`,
+  `NOT-A-DEFECT: <reason>` or `DISAGREE: <evidence>`, as §6.2 defines what
+  closes each. Resolve the thread after answering.
 - If the repository has a merge-gate script or Makefile target, run it before
-  calling a PR ready (for example `make review-gate PR=<n>`), and wait for the
-  CI status that reports the same verdict where there is one. If it has none,
-  check each item above by hand.
-- Report the PR ready. Merge only when the user authorizes that merge.
+  calling a PR ready, and wait for the CI status that reports the same verdict
+  where there is one. If it has none, check each item above by hand.
+- Report the PR ready.
 
 ## Files
 
@@ -189,16 +186,28 @@ in a default install. The scripts live in `<skill-dir>/scripts/`, apart from any
   mark contrast, both themes).
   `node <skill-dir>/scripts/svg-audit.mjs [--min-text 9] [--min-box-text 11] [--grid-color '#e4e8ec'] *.svg`,
   or import `auditSvg` into the repo's test. Exit 1 on any issue, 2 on a usage
-  or read error.
+  or read error; `-h` prints usage.
 - `<skill-dir>/scripts/numcheck.mjs`: number-preservation check for prose
   edits, `node <skill-dir>/scripts/numcheck.mjs <base-ref> <doc.md>...`. Exit 1
   on an added number, 2 when the check could not run (bad ref, not a git
   repository).
 - `<skill-dir>/scripts/linkcheck.mjs`: relative-link and anchor checker, GitHub
-  slug rules, `node <skill-dir>/scripts/linkcheck.mjs <doc.md>...`.
+  slug rules, `node <skill-dir>/scripts/linkcheck.mjs <doc.md>...`. Exit 1 on a
+  broken link, 2 on a usage or read error.
 - `<skill-dir>/scripts/test-svg-audit.mjs`, `test-numcheck.mjs` and
-  `test-linkcheck.mjs`: one test file per script, on fixtures in a temp
+  `test-linkcheck.mjs`: one `node:test` file per script, on fixtures in a temp
   directory (the numcheck and linkcheck tests build a throwaway git repository).
-  Run them all with
-  `for t in <skill-dir>/scripts/test-*.mjs; do node "$t" || break; done`
-  (one `node` call runs one file); each file exits 1 on any failure.
+  Each file exits non-zero on any failure; one `node` call runs one file, so run
+  them all with:
+
+  ```sh
+  for t in <skill-dir>/scripts/test-*.mjs; do node "$t" || exit 1; done
+  ```
+
+Other commands the sections above refer to:
+
+- Rebase a stacked branch after its parent is rewritten:
+  `git rebase --onto <new-parent> <old-parent> <branch>`.
+- The codex reviewer, in the background with stdin closed (without
+  `</dev/null` it can wait on stdin indefinitely):
+  `codex exec -s read-only "<prompt>" </dev/null > log 2>&1`.

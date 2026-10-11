@@ -8,15 +8,17 @@
 //   node svg-audit.mjs [--min-text 9] [--min-box-text 11] [--grid-color #e4e8ec] chart.svg...
 //   import { auditSvg } from "./svg-audit.mjs"   (for a repo's own test)
 //
-// Exits 1 when any file has an issue, 2 on a usage or read error.
+// Exits 1 when any file has an issue, 2 on a usage or read error. -h/--help prints usage.
 // Text needs 4.5:1, marks 3:1 (WCAG 2.x).
 //
 // What is read: presentation attributes, `style="..."` attributes, and the dark rules
 // (`@media (prefers-color-scheme: dark){ tag[attr="value"]{prop:value} }`, any
 // whitespace, any number of rules and blocks). fill, stroke, font-size and the opacities
-// inherit through <g>/<text>/<tspan> ancestors; font-size takes px/pt/em/rem/% and
-// keywords; <tspan> runs are audited on their own; translate() transforms offset the
-// geometry. A stylesheet rule the audit cannot interpret (class or bare-tag selector,
+// inherit through <g>/<text>/<tspan> ancestors, with SVG's initial values when nothing
+// declares them (an unset fill is black, so a shape with no fill is a black box or mark);
+// font-size takes px or a unitless number, any other form is reported as unreadable;
+// <tspan> runs are audited on their own; translate() transforms offset the geometry.
+// A stylesheet rule the audit cannot interpret (class or bare-tag selector,
 // a rule outside the dark block, another @media) is reported as an issue, never dropped.
 // Not modelled: rotate/scale/matrix transforms, <use>, gradients (reported as notes).
 //
@@ -25,12 +27,50 @@
 
 import { readFileSync, realpathSync } from "node:fs";
 import { fileURLToPath } from "node:url";
+import { parseArgs } from "node:util";
 
-export const GRID_COLOR = "#e4e8ec";
+const THEMES = ["light", "dark"];
 // the page behind an SVG that draws no background rect of its own
 const FALLBACK_PAGE = { light: [255, 255, 255], dark: [13, 17, 23] };
 const FALLBACK_NOTE =
   "no background rect: assuming a #ffffff page in light and #0d1117 in dark";
+
+// SVG properties the audit reads: inherited or not, and the initial value that applies
+// when neither the element, an ancestor nor a rule declares one
+const PROPS = {
+  fill: { inherit: true, initial: "black" },
+  stroke: { inherit: true, initial: "none" },
+  "fill-opacity": { inherit: true, initial: "1" },
+  "stroke-opacity": { inherit: true, initial: "1" },
+  opacity: { inherit: false, initial: "1" },
+  "font-size": { inherit: true, initial: "16" },
+  color: { inherit: true, initial: "black" },
+};
+// shape → the channels it paints, in report order
+const PAINTS = new Map(
+  Object.entries({
+    rect: ["fill", "stroke"],
+    circle: ["fill", "stroke"],
+    ellipse: ["fill", "stroke"],
+    polyline: ["stroke", "fill"],
+    polygon: ["stroke", "fill"],
+    path: ["stroke", "fill"],
+    line: ["stroke"],
+  }),
+);
+// not drawn: definitions, clip paths, masks
+const HIDDEN = new Set([
+  "defs",
+  "clipPath",
+  "mask",
+  "pattern",
+  "symbol",
+  "marker",
+]);
+// shapes whose grid-coloured stroke is a gridline or rule
+const HAIRLINES = new Set(["line", "path", "polyline"]);
+// children of <text> that carry text of their own
+const TEXT_KIDS = new Set(["tspan", "textPath"]);
 
 const lum = ([r, g, b]) => {
   const f = (c) => (
@@ -39,27 +79,24 @@ const lum = ([r, g, b]) => {
   );
   return 0.2126 * f(r) + 0.7152 * f(g) + 0.0722 * f(b);
 };
-export const contrast = (a, b) =>
+const contrast = (a, b) =>
   (Math.max(lum(a), lum(b)) + 0.05) / (Math.min(lum(a), lum(b)) + 0.05);
 
 // colour string → { rgb, a } (null for none / unparsable)
-export const parseColor = (s) => {
+const parseColor = (s) => {
   s = typeof s === "string" ? s.trim() : s;
   if (!s || /^(none|transparent)$/i.test(s)) return null;
   if (/^black$/i.test(s)) return { rgb: [0, 0, 0], a: 1 };
   if (/^white$/i.test(s)) return { rgb: [255, 255, 255], a: 1 };
-  let m = /^#([0-9a-f]{6})([0-9a-f]{2})?$/i.exec(s);
-  if (m)
+  let m = /^#([0-9a-f]{3,4}|[0-9a-f]{6}|[0-9a-f]{8})$/i.exec(s);
+  if (m) {
+    // #rgb[a] → #rrggbb[aa]
+    const h = m[1].length <= 4 ? [...m[1]].map((c) => c + c).join("") : m[1];
     return {
-      rgb: [0, 2, 4].map((i) => parseInt(m[1].slice(i, i + 2), 16)),
-      a: m[2] ? parseInt(m[2], 16) / 255 : 1,
+      rgb: [0, 2, 4].map((i) => parseInt(h.slice(i, i + 2), 16)),
+      a: h.length === 8 ? parseInt(h.slice(6), 16) / 255 : 1,
     };
-  m = /^#([0-9a-f]{3})([0-9a-f])?$/i.exec(s);
-  if (m)
-    return {
-      rgb: [...m[1]].map((c) => parseInt(c + c, 16)),
-      a: m[2] ? parseInt(m[2] + m[2], 16) / 255 : 1,
-    };
+  }
   m =
     /^rgba?\(\s*([\d.]+)\s*,\s*([\d.]+)\s*,\s*([\d.]+)\s*(?:,\s*([\d.]+)\s*)?\)$/i.exec(
       s,
@@ -158,13 +195,10 @@ function parseSvg(src) {
   return { root, styles };
 }
 
-const walk = (el, fn) => {
-  for (const k of el.kids || []) {
-    if (k.text !== undefined) continue;
-    fn(k);
-    walk(k, fn);
-  }
-};
+// the element and its ancestors, up to (not including) the root
+function* chain(el) {
+  for (let p = el; p && p.tag !== "#root"; p = p.parent) yield p;
+}
 
 // ---- the stylesheet --------------------------------------------------------------------
 
@@ -190,18 +224,19 @@ const splitTop = (s, sep) => {
   return out;
 };
 
+// one attribute condition: [name], [name=v], [name="v"], [name='v'] → name, value
+const COND = String.raw`\[\s*([\w:-]+)\s*(?:=\s*(?:"([^"]*)"|'([^']*)'|([^\]\s]+))\s*)?\]`;
+const SELECTOR = new RegExp(String.raw`^(\*|[a-zA-Z][\w-]*)?((?:${COND})+)$`);
+const CONDS = new RegExp(COND, "g");
+
 // `tag[attr="v"]`, `[attr='v']`, `rect[fill=#fff][stroke]` → { tag, conds } or null
 const parseSelector = (sel) => {
-  const m =
-    /^(\*|[a-zA-Z][\w-]*)?((?:\[\s*[\w:-]+\s*(?:=\s*(?:"[^"]*"|'[^']*'|[^\]\s]+)\s*)?\])+)$/.exec(
-      sel.trim(),
-    );
-  if (!m || (!m[1] && !m[2])) return null;
-  const conds = [
-    ...m[2].matchAll(
-      /\[\s*([\w:-]+)\s*(?:=\s*(?:"([^"]*)"|'([^']*)'|([^\]\s]+))\s*)?\]/g,
-    ),
-  ].map((c) => [c[1], c[2] ?? c[3] ?? c[4] ?? null]);
+  const m = SELECTOR.exec(sel.trim());
+  if (!m) return null;
+  const conds = [...m[2].matchAll(CONDS)].map((c) => [
+    c[1],
+    c[2] ?? c[3] ?? c[4] ?? null,
+  ]);
   return { tag: m[1] && m[1] !== "*" ? m[1] : null, conds };
 };
 
@@ -225,15 +260,10 @@ function parseStylesheets(styles) {
       while (i < css.length && /\s/.test(css[i])) i++;
       if (i >= css.length) break;
       const brace = css.indexOf("{", i);
-      const semi = css.indexOf(";", i);
-      if (css[i] === "@" && semi >= 0 && (brace < 0 || semi < brace)) {
-        problems.push(
-          `unsupported at-rule "${css.slice(i, semi).trim()}": not applied`,
-        );
-        i = semi + 1;
-        continue;
+      if (brace < 0) {
+        problems.push(`unsupported "${css.slice(i).trim()}": not applied`);
+        break;
       }
-      if (brace < 0) break;
       const end = closeBrace(css, brace);
       const prelude = css.slice(i, brace).trim().replace(/\s+/g, " ");
       const body = css.slice(brace + 1, end);
@@ -271,14 +301,6 @@ const ruleMatches = (r, el) =>
 
 // ---- computed properties ---------------------------------------------------------------
 
-const INHERITED = new Set([
-  "fill",
-  "stroke",
-  "fill-opacity",
-  "stroke-opacity",
-  "color",
-]);
-
 // the value declared on this element for a theme: style attr > dark rule > attribute
 function declared(el, prop, theme, ctx) {
   if (el.style && prop in el.style) return el.style[prop];
@@ -291,88 +313,56 @@ function declared(el, prop, theme, ctx) {
   return el.a[prop];
 }
 
-// inherited property: nearest ancestor-or-self that declares it
+// the value in effect: this element's, else (for inherited properties) the nearest
+// ancestor's, else the property's initial value. Never undefined.
 function computed(el, prop, theme, ctx) {
-  for (let p = el; p && p.tag !== "#root"; p = p.parent) {
+  const { inherit, initial } = PROPS[prop];
+  for (const p of chain(el)) {
     const v = declared(p, prop, theme, ctx);
     if (v !== undefined && v !== "inherit") return v;
-    if (!INHERITED.has(prop)) return undefined;
+    if (!inherit) break;
   }
-  return undefined;
+  return initial;
 }
 
 const NUM = (v) => (v === undefined ? NaN : parseFloat(v));
-const KEYWORD_PX = {
-  "xx-small": 9,
-  "x-small": 10,
-  small: 13,
-  medium: 16,
-  large: 18,
-  "x-large": 24,
-  "xx-large": 32,
+const numberOr = (v, dflt) =>
+  Number.isFinite(parseFloat(v)) ? parseFloat(v) : dflt;
+
+// font-size in px: px or a unitless number; NaN for any other form
+const fontPx = (raw) => {
+  const m = /^(\d+\.?\d*|\.\d+)(?:px)?$/i.exec(raw.trim());
+  return m ? +m[1] : NaN;
 };
 
-// font-size in px; NaN when the value cannot be read
-function fontSize(el, ctx) {
-  if (!el || el.tag === "#root") return 16;
-  const parent = fontSize(el.parent, ctx);
-  const raw = declared(el, "font-size", "light", ctx);
-  if (raw === undefined || raw === "inherit") return parent;
-  const v = raw.trim().toLowerCase();
-  if (v in KEYWORD_PX) return KEYWORD_PX[v];
-  if (v === "smaller") return parent / 1.2;
-  if (v === "larger") return parent * 1.2;
-  const m = /^([\d.]+)\s*(px|pt|pc|em|rem|ex|%|in|cm|mm)?$/.exec(v);
-  if (!m) return NaN;
-  const n = +m[1];
-  const k = {
-    px: 1,
-    pt: 4 / 3,
-    pc: 16,
-    em: parent,
-    rem: 16,
-    ex: parent / 2,
-    "%": parent / 100,
-    in: 96,
-    cm: 96 / 2.54,
-    mm: 96 / 25.4,
-  };
-  return n * k[m[2] || "px"];
-}
-
 // product of `opacity` on the element and its ancestors
-function groupOpacity(el, theme, ctx) {
+const groupOpacity = (el, theme, ctx) => {
   let k = 1;
-  for (let p = el; p && p.tag !== "#root"; p = p.parent) {
-    const v = declared(p, "opacity", theme, ctx);
-    if (v !== undefined && Number.isFinite(parseFloat(v))) k *= parseFloat(v);
-  }
+  for (const p of chain(el))
+    k *= numberOr(computed(p, "opacity", theme, ctx), 1);
   return k;
-}
+};
 
-// effective { raw, color } of fill/stroke in a theme; raw undefined when never declared
+// effective { raw, color } of fill/stroke in a theme
 function paint(el, attr, theme, ctx) {
   let raw = computed(el, attr, theme, ctx);
-  if (raw === undefined) return { raw, color: null };
-  if (/^currentcolor$/i.test(raw))
-    raw = computed(el, "color", theme, ctx) ?? "#000000";
+  if (/^currentcolor$/i.test(raw)) raw = computed(el, "color", theme, ctx);
   let color = parseColor(raw);
-  if (color) {
-    const op = parseFloat(computed(el, `${attr}-opacity`, theme, ctx));
+  if (color)
     color = withAlpha(
       color,
-      (Number.isFinite(op) ? op : 1) * groupOpacity(el, theme, ctx),
+      numberOr(computed(el, `${attr}-opacity`, theme, ctx), 1) *
+        groupOpacity(el, theme, ctx),
     );
-  }
   return { raw, color };
 }
-const isNone = (raw) => raw === undefined || /^none$/i.test(raw.trim());
+const isNone = (raw) => /^none$/i.test(raw.trim());
 
 // accumulated translate() of the element and its ancestors; other transforms → notes
 function offset(el, notes) {
   let x = 0;
   let y = 0;
-  for (let p = el; p && p.tag !== "#root"; p = p.parent) {
+  for (const p of chain(el)) {
     const t = p.a.transform;
     if (!t) continue;
     for (const f of t.matchAll(/(\w+)\s*\(([^)]*)\)/g)) {
@@ -391,19 +381,9 @@ function offset(el, notes) {
 
 // ---- the audit ---------------------------------------------------------------------------
 
-const SHAPES = new Set([
-  "rect",
-  "circle",
-  "ellipse",
-  "polyline",
-  "polygon",
-  "line",
-  "path",
-]);
-
 export function auditSvg(
   svg,
-  { minText = 9, minBoxText = 11, gridColor = GRID_COLOR } = {},
+  { minText = 9, minBoxText = 11, gridColor = "#e4e8ec" } = {},
 ) {
   for (const [name, v] of [
     ["minText", minText],
@@ -451,19 +431,11 @@ export function auditSvg(
   // drawn elements, in document order (not <defs>, clip paths or masks)
   const shapes = [];
   const texts = [];
-  const hidden = new Set([
-    "defs",
-    "clipPath",
-    "mask",
-    "pattern",
-    "symbol",
-    "marker",
-  ]);
   const visit = (el) => {
     for (const k of el.kids) {
-      if (k.text !== undefined || hidden.has(k.tag)) continue;
+      if (k.text !== undefined || HIDDEN.has(k.tag)) continue;
       if (k.tag === "use") notes.add("<use> references are not followed");
-      if (SHAPES.has(k.tag)) shapes.push(k);
+      if (PAINTS.has(k.tag)) shapes.push(k);
       else if (k.tag === "text") texts.push(k);
       visit(k);
     }
@@ -484,6 +456,7 @@ export function auditSvg(
     v !== undefined &&
     (v.trim() === "100%" ||
       (total !== null && Math.abs(parseFloat(v) - total) < 0.5));
+  const filled = (e) => !isNone(paint(e, "fill", "light", ctx).raw);
 
   // the page: the first filled rect that covers the whole canvas, else the fallback
   const bgRect = shapes.find((e) => {
@@ -494,23 +467,18 @@ export function auditSvg(
       Math.abs(g.y - originY) < 0.5 &&
       sizeIs(e.a.width, W) &&
       sizeIs(e.a.height, H) &&
-      !isNone(paint(e, "fill", "light", ctx).raw)
+      filled(e)
     );
   });
   const page = {};
-  for (const theme of ["light", "dark"]) {
+  for (const theme of THEMES) {
     const f = bgRect ? paint(bgRect, "fill", theme, ctx).color : null;
     page[theme] = f ? over(f, FALLBACK_PAGE[theme]) : FALLBACK_PAGE[theme];
     if (!f) notes.add(FALLBACK_NOTE);
   }
 
   const rects = shapes
-    .filter(
-      (e) =>
-        e.tag === "rect" &&
-        e !== bgRect &&
-        !isNone(paint(e, "fill", "light", ctx).raw),
-    )
+    .filter((e) => e.tag === "rect" && e !== bgRect && filled(e))
     .map(geom)
     .filter((r) => r.w > 3 && r.h > 3);
 
@@ -526,13 +494,13 @@ export function auditSvg(
         .trim();
       if (own) runs.push({ el, s: own, root: t });
       for (const k of el.kids)
-        if (k.text === undefined && (k.tag === "tspan" || k.tag === "textPath"))
-          collect(k);
+        if (k.text === undefined && TEXT_KIDS.has(k.tag)) collect(k);
     };
     collect(t);
   }
+  // an x/y attribute from the run or an ancestor up to its <text>
   const attrUp = (run, name) => {
-    for (let p = run.el; p; p = p.parent) {
+    for (const p of chain(run.el)) {
       if (p.a[name] !== undefined)
         return NUM(p.a[name].trim().split(/[\s,]+/)[0]);
       if (p === run.root) break;
@@ -543,16 +511,8 @@ export function auditSvg(
     const [dx, dy] = offset(run.el, notes);
     const x = attrUp(run, "x") + dx;
     const y = attrUp(run, "y") + dy;
-    const size = fontSize(run.el, ctx);
-    if (!Number.isFinite(size)) {
-      out.push(
-        `"${run.s}" has a font-size the audit cannot read (${declared(run.el, "font-size", "light", ctx)})`,
-      );
-      continue;
-    }
-    const shown = Math.round(size * 100) / 100;
-    if (size < minText)
-      out.push(`"${run.s}" is ${shown}px (floor ${minText}px)`);
+    const sizeRaw = (theme) => computed(run.el, "font-size", theme, ctx);
+    const size = fontPx(sizeRaw("light"));
     // the smallest filled rect drawn under the text's anchor point
     const under = rects
       .filter(
@@ -568,72 +528,70 @@ export function auditSvg(
       !isNone(paint(under.e, "stroke", "light", ctx).raw) &&
       under.w > 40 &&
       under.h > 20;
-    if (isBox && size < minBoxText)
-      out.push(
-        `"${run.s}" is ${shown}px inside a figure box (floor ${minBoxText}px)`,
-      );
-    for (const theme of ["light", "dark"]) {
-      // an unset fill is SVG's initial black in either theme; only a rule or an ancestor recolours it
+    for (const theme of THEMES) {
+      // the dark size is only audited when a dark rule changes it
+      if (theme === "dark" && sizeRaw("dark") === sizeRaw("light")) continue;
+      const pre = theme === "dark" ? "dark: " : "";
+      const px = fontPx(sizeRaw(theme));
+      if (!Number.isFinite(px)) {
+        out.push(
+          `${pre}"${run.s}" has a font-size the audit cannot read (${sizeRaw(theme)})`,
+        );
+        continue;
+      }
+      const shown = Math.round(px * 100) / 100;
+      if (px < minText)
+        out.push(`${pre}"${run.s}" is ${shown}px (floor ${minText}px)`);
+      if (isBox && px < minBoxText)
+        out.push(
+          `${pre}"${run.s}" is ${shown}px inside a figure box (floor ${minBoxText}px)`,
+        );
+    }
+    if (!Number.isFinite(size)) continue;
+    for (const theme of THEMES) {
       const p = paint(run.el, "fill", theme, ctx);
-      if (!isNone(p.raw) && !p.color) {
+      if (isNone(p.raw)) continue; // fill:none draws nothing
+      if (!p.color) {
         out.push(
           `${theme}: "${run.s}" has a fill the audit cannot read (${p.raw})`,
         );
         continue;
       }
-      if (isNone(p.raw) && p.raw !== undefined) continue; // fill:none draws nothing
-      const ink = p.color || {
-        rgb: [0, 0, 0],
-        a: groupOpacity(run.el, theme, ctx),
-      };
       let bg = page[theme];
       if (under) {
         const f = paint(under.e, "fill", theme, ctx).color;
         if (f) bg = over(f, bg);
       }
-      const c = contrast(over(ink, bg), bg);
+      const c = contrast(over(p.color, bg), bg);
       if (c < 4.5)
         out.push(
-          `${theme}: "${run.s}" ${p.raw ?? "(default black)"} at ${c.toFixed(2)}:1 (needs 4.5:1)`,
+          `${theme}: "${run.s}" ${p.raw} at ${c.toFixed(2)}:1 (needs 4.5:1)`,
         );
     }
   }
 
   // ---- non-text marks: series lines, arrows and edges, dots (filled or hollow), solid
   // bars, and small stroke-only tiles. Exempt: boxes that frame text (a container
-  // border), stripes ≤3px, and hairlines drawn in the grid colour (gridlines and rules
-  // are decoration; the axis labels carry the values).
-  const marks = [];
-  for (const e of shapes) {
-    if (e === bgRect) continue;
-    const stroke = paint(e, "stroke", "light", ctx);
-    const fill = paint(e, "fill", "light", ctx);
-    const stroked = !isNone(stroke.raw);
-    const filled = !isNone(fill.raw);
-    const gridHairline =
-      stroked &&
-      ["line", "path", "polyline"].includes(e.tag) &&
-      stroke.color &&
-      stroke.color.rgb.every((c, i) => c === grid.rgb[i]);
-    if (e.tag === "circle" || e.tag === "ellipse") {
-      if (filled) marks.push([e, "fill"]);
-      if (stroked) marks.push([e, "stroke"]);
-    } else if (["polyline", "line", "path", "polygon"].includes(e.tag)) {
-      if (stroked && !gridHairline) marks.push([e, "stroke"]);
-      if (["path", "polygon"].includes(e.tag) && filled)
-        marks.push([e, "fill"]); // arrowheads
-    } else if (e.tag === "rect") {
-      const w = NUM(e.a.width);
-      const h = NUM(e.a.height);
-      if (!(w > 3 && h > 3)) continue;
-      if (stroked && w <= 24 && h <= 24)
-        marks.push([e, "stroke"]); // a tile's outline
-      else if (filled && fill.color && fill.color.a >= 1 && !stroked)
-        marks.push([e, "fill"]);
+  // border), stripes ≤3px, hairlines drawn in the grid colour (gridlines and rules
+  // are decoration; the axis labels carry the values), and a page-coloured fill
+  // (a hollow dot's centre).
+  const checkMark = (e, attr) => {
+    if (e.tag === "rect") {
+      const { w, h } = geom(e);
+      if (!(w > 3 && h > 3)) return;
+      // a box that frames text: no mark for a border over 24px, or for a bordered fill
+      if (
+        attr === "stroke"
+          ? w > 24 || h > 24
+          : !isNone(paint(e, "stroke", "light", ctx).raw)
+      )
+        return;
     }
-  }
-  for (const [e, attr] of marks) {
-    for (const theme of ["light", "dark"]) {
+    if (attr === "stroke" && HAIRLINES.has(e.tag)) {
+      const c = paint(e, "stroke", "light", ctx).color;
+      if (c && c.rgb.every((v, i) => v === grid.rgb[i])) return;
+    }
+    for (const theme of THEMES) {
       const p = paint(e, attr, theme, ctx);
       if (isNone(p.raw)) continue;
       if (!p.color) {
@@ -644,59 +602,56 @@ export function auditSvg(
       }
       if (p.color.a < 1) continue;
       const c = contrast(p.color.rgb, page[theme]);
-      // the page-coloured fill (a hollow dot's centre) is not a mark
       if (c === 1) continue;
       if (c < 3)
         out.push(
           `${theme}: ${e.tag} ${attr} ${p.raw} at ${c.toFixed(2)}:1 (marks need 3:1)`,
         );
     }
-  }
+  };
+  for (const e of shapes)
+    if (e !== bgRect) for (const attr of PAINTS.get(e.tag)) checkMark(e, attr);
   return done();
 }
 
 // ---- CLI ---------------------------------------------------------------------------------
 
+const USAGE =
+  "usage: node svg-audit.mjs [--min-text N] [--min-box-text N] [--grid-color COLOR] chart.svg...";
+
 function main(argv) {
-  const usage = () => {
-    console.error(
-      "usage: node svg-audit.mjs [--min-text N] [--min-box-text N] [--grid-color COLOR] chart.svg...",
-    );
+  const fail = (msg) => {
+    console.error(msg ? `${msg}\n${USAGE}` : USAGE);
     process.exit(2);
   };
-  const opt = { minText: 9, minBoxText: 11, gridColor: GRID_COLOR };
-  const files = [];
-  const value = (args, i, flag) => {
-    const eq = args[i].indexOf("=");
-    if (eq > 0) return [args[i].slice(eq + 1), i];
-    if (i + 1 >= args.length) {
-      console.error(`${flag} needs a value`);
-      usage();
-    }
-    return [args[i + 1], i + 1];
-  };
-  for (let i = 0; i < argv.length; i++) {
-    const flag = argv[i].split("=")[0];
-    if (flag === "--min-text" || flag === "--min-box-text") {
-      let v;
-      [v, i] = value(argv, i, flag);
-      if (v.trim() === "" || !Number.isFinite(+v) || +v < 0) {
-        console.error(`${flag} must be a non-negative number, got "${v}"`);
-        usage();
-      }
-      opt[flag === "--min-text" ? "minText" : "minBoxText"] = +v;
-    } else if (flag === "--grid-color") {
-      let v;
-      [v, i] = value(argv, i, flag);
-      if (!parseColor(v)) {
-        console.error(`--grid-color must be a hex or rgb() colour, got "${v}"`);
-        usage();
-      }
-      opt.gridColor = v;
-    } else if (argv[i].startsWith("--") || argv[i] === "-h") usage();
-    else files.push(argv[i]);
+  let parsed;
+  try {
+    parsed = parseArgs({
+      args: argv,
+      allowPositionals: true,
+      strict: true,
+      options: {
+        "min-text": { type: "string" },
+        "min-box-text": { type: "string" },
+        "grid-color": { type: "string" },
+        help: { type: "boolean", short: "h" },
+      },
+    });
+  } catch (e) {
+    fail(e.message);
   }
-  if (!files.length) usage();
+  const { values, positionals: files } = parsed;
+  if (values.help) {
+    console.log(USAGE);
+    process.exit(0);
+  }
+  if (!files.length) fail();
+  // only the flags given; auditSvg owns the defaults and the validation
+  const num = (v) => (v.trim() === "" ? NaN : Number(v));
+  const opt = {};
+  if ("min-text" in values) opt.minText = num(values["min-text"]);
+  if ("min-box-text" in values) opt.minBoxText = num(values["min-box-text"]);
+  if ("grid-color" in values) opt.gridColor = values["grid-color"];
   let bad = 0;
   for (const f of files) {
     let src;
@@ -706,7 +661,13 @@ function main(argv) {
       console.error(`${f}: ${e.message}`);
       process.exit(2);
     }
-    const issues = auditSvg(src, opt);
+    let issues;
+    try {
+      issues = auditSvg(src, opt);
+    } catch (e) {
+      if (e instanceof TypeError) fail(e.message);
+      throw e;
+    }
     if (issues.length) bad++;
     const lines = [...issues, ...issues.notes.map((n) => `note: ${n}`)];
     console.log(
@@ -717,15 +678,8 @@ function main(argv) {
 }
 
 // run as a CLI, including through a symlink (argv[1] is the link, import.meta.url the target)
-const isMain = (() => {
-  try {
-    return (
-      Boolean(process.argv[1]) &&
-      realpathSync(process.argv[1]) ===
-        realpathSync(fileURLToPath(import.meta.url))
-    );
-  } catch {
-    return false;
-  }
-})();
-if (isMain) main(process.argv.slice(2));
+if (
+  process.argv[1] &&
+  realpathSync(process.argv[1]) === fileURLToPath(import.meta.url)
+)
+  main(process.argv.slice(2));

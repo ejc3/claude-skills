@@ -13,28 +13,26 @@ import {
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import test from "node:test";
 
 const SCRIPT = fileURLToPath(new URL("./linkcheck.mjs", import.meta.url));
 const tmp = mkdtempSync(join(tmpdir(), "linkcheck-test-"));
-
-let failed = 0;
-let ran = 0;
-const test = (name, fn) => {
-  ran++;
-  try {
-    fn();
-    console.log(`ok   ${name}`);
-  } catch (e) {
-    failed++;
-    console.log(`FAIL ${name}\n     ${String(e.message).split("\n")[0]}`);
-  }
-};
+test.after(() => rmSync(tmp, { recursive: true, force: true }));
 
 let n = 0;
-// a git repository holding `files`; returns its directory
-const repo = (files) => {
-  const dir = join(tmp, `repo${n++}`);
+// a fresh directory holding `files`
+const plain = (files) => {
+  const dir = join(tmp, `dir${n++}`);
   mkdirSync(dir);
+  for (const [name, body] of Object.entries(files)) {
+    mkdirSync(dirname(join(dir, name)), { recursive: true });
+    writeFileSync(join(dir, name), body);
+  }
+  return dir;
+};
+// the same, as a git repository
+const repo = (files) => {
+  const dir = plain({});
   spawnSync("git", ["init", "-q"], { cwd: dir });
   for (const [name, body] of Object.entries(files)) {
     mkdirSync(dirname(join(dir, name)), { recursive: true });
@@ -44,22 +42,32 @@ const repo = (files) => {
 };
 const run = (cwd, ...args) =>
   spawnSync(process.execPath, [SCRIPT, ...args], { cwd, encoding: "utf8" });
+// run the CLI through a symlink to the script, as an installed skill is
+const viaLink = (cwd, ...args) => {
+  const link = join(tmp, `linkcheck-link${n++}.mjs`);
+  symlinkSync(SCRIPT, link);
+  return spawnSync(process.execPath, [link, ...args], {
+    cwd,
+    encoding: "utf8",
+  });
+};
 // check a.md in a repo that also holds `others`
-const check = (a, others = {}, file = "a.md") => {
-  const dir = repo({ "a.md": a, ...others });
-  return run(dir, file);
+const check = (a, others = {}, file = "a.md") =>
+  run(repo({ "a.md": a, ...others }), file);
+const expectExit = (r, status, stdout) => {
+  assert.equal(r.status, status, r.stdout + r.stderr);
+  if (stdout) assert.match(r.stdout, stdout);
 };
 const summary = (r) => /checked (\d+) links, (\d+) broken/.exec(r.stdout);
 const expectClean = (r, links) => {
-  assert.equal(r.status, 0, r.stdout + r.stderr);
+  expectExit(r, 0);
   const m = summary(r);
   assert.ok(m, r.stdout);
   if (links !== undefined) assert.equal(+m[1], links, r.stdout);
 };
 const expectBroken = (r, count, re) => {
-  assert.equal(r.status, 1, r.stdout + r.stderr);
+  expectExit(r, 1, re);
   assert.equal(+summary(r)?.[2], count, r.stdout + r.stderr);
-  if (re) assert.match(r.stdout, re);
 };
 
 // ---- baseline behaviour --------------------------------------------------------------------------
@@ -114,9 +122,7 @@ test("control: a missing /path target is reported", () => {
   expectBroken(run(dir, "docs/a.md"), 1, /missing file \/docs\/nope\.md/);
 });
 test("F9 a /path link outside a git repository is reported, not resolved at /", () => {
-  const dir = join(tmp, "plain");
-  mkdirSync(dir);
-  writeFileSync(join(dir, "a.md"), "[x](/etc/hostname)\n");
+  const dir = plain({ "a.md": "[x](/etc/hostname)\n" });
   expectBroken(run(dir, "a.md"), 1, /not in a git repository/);
 });
 
@@ -239,24 +245,73 @@ test("F9 ?query and #L10 line anchors are accepted", () => {
   expectClean(r, 3);
 });
 
+// ---- structure: fences, anchors, link forms ------------------------------------------------------------------
+
+test("a fence closes only on its own marker, at least as long, with nothing after it", () => {
+  const r = check(
+    "[a](nope.md)\n````\n```\n[b](nope.md)\n``` text\n[c](nope.md)\n````\n~~~\n````\n[d](nope.md)\n~~~\n[e](nope.md)\n",
+  );
+  expectBroken(r, 2, /a\.md:1: missing file/);
+  assert.match(r.stdout, /a\.md:12: missing file/);
+});
+test("an unclosed fence hides the rest of the file", () => {
+  expectClean(check("```\n[a](nope.md)\n"), 0);
+});
+test("a fence between two lines breaks a setext paragraph", () => {
+  const r = check("[a](b.md#para)\n", {
+    "b.md": "para\n```\ncode\n```\n---\n",
+  });
+  expectBroken(r, 1, /missing anchor/);
+});
+test("an id or <a name> inside a code block is not an anchor", () => {
+  const r = check("[a](b.md#fake) [b](b.md#fake2) [c](b.md#real)\n", {
+    "b.md":
+      '```html\n<div id="fake"></div>\n<a name="fake2"></a>\n```\n\n<span id="real"></span>\n',
+  });
+  expectBroken(r, 2, /missing anchor b\.md#fake\b/);
+  assert.match(r.stdout, /missing anchor b\.md#fake2/);
+});
+test("id works on any tag, name only on <a>, and a tag split across lines is read", () => {
+  const r = check("[a](b.md#i) [b](b.md#n) [c](b.md#bad) [d](b.md#multi)\n", {
+    "b.md":
+      '<p class="x" id="i"></p>\n<a href="#" name=\'n\'></a>\n<abbr name="bad"></abbr>\n<div\n  id="multi">\n</div>\n',
+  });
+  expectBroken(r, 1, /missing anchor b\.md#bad/);
+});
+test("a file literally named with %20 is not found by its encoded link", () => {
+  const r = check("[a](my%20file.md)\n", { "my%20file.md": "x\n" });
+  expectBroken(r, 1, /missing file my%20file\.md/);
+});
+test("a link to a directory resolves and a fragment on it is ignored", () => {
+  expectClean(check("[a](docs/) [b](docs/#x)\n", { "docs/x.md": "x\n" }), 2);
+});
+test("underscore emphasis is dropped from slugs only when it frames the text", () => {
+  const r = check(
+    "[1](b.md#triple-text) [2](b.md#a_b_c) [3](b.md#_lead-and-trail_x)\n",
+    { "b.md": "# ___triple___ text\n# a_b_c\n# _lead and trail_x\n" },
+  );
+  expectClean(r, 3);
+});
+test("a link title in any form and a nested parenthesis in one line", () => {
+  const r = check(
+    `[a](b.md "t (x)") [b](f_(x).md 'y') [c](<b.md> "t") [d](b.md  )\n`,
+    { "b.md": "# S\n", "f_(x).md": "x\n" },
+  );
+  expectClean(r, 4);
+});
+test("two links on one line are both read, and an unclosed one is not", () => {
+  const r = check('[a](nope.md)[b](nope2.md) [c](oops.md "t\n', {});
+  expectBroken(r, 2, /missing file nope2\.md/);
+});
+
 // ---- the CLI ---------------------------------------------------------------------------------------------------------------
 
 test("CLI runs through a symlink", () => {
   const dir = repo({ "a.md": "[x](nope.md)\n[y](a.md)\n" });
-  const link = join(tmp, "linkcheck-link.mjs");
-  symlinkSync(SCRIPT, link);
-  const r = spawnSync(process.execPath, [link, "a.md"], {
-    cwd: dir,
-    encoding: "utf8",
-  });
-  expectBroken(r, 1, /missing file nope\.md/);
+  expectBroken(viaLink(dir, "a.md"), 1, /missing file nope\.md/);
 });
 test("CLI with no files or an unreadable file exits 2", () => {
   const dir = repo({ "a.md": "x\n" });
-  assert.equal(run(dir).status, 2);
-  assert.equal(run(dir, "gone.md").status, 2);
+  expectExit(run(dir), 2);
+  expectExit(run(dir, "gone.md"), 2);
 });
-
-rmSync(tmp, { recursive: true, force: true });
-console.log(`\n${ran - failed}/${ran} passed`);
-process.exit(failed ? 1 : 0);
