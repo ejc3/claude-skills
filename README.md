@@ -7,6 +7,7 @@ templates it uses.
 | Skill | What it is for |
 |---|---|
 | [`pr-diligence`](pr-diligence/SKILL.md) | Preparing a pull request someone else will judge, such as a fix sent upstream: a red/green regression test in the builds the project's CI uses, a fix no bigger than the defect, parallel independent review of a frozen packet, a private-value scan, plain PR text, and a public walkthrough page of the code generated from git. |
+| [`vercel-to-cloudflare`](vercel-to-cloudflare/SKILL.md) | Moving a Next.js site from Vercel to Cloudflare Workers, or running it on both during the move: a Vercel-to-Cloudflare feature map with the gotchas that break only on Workers, a staged strategy from a protected staging Worker to a domain cutover with one-step rollback, pre- and post-cutover checklists, and how to run several conversions at once. |
 
 ## Install
 
@@ -15,6 +16,7 @@ Clone the repository and link the skills you want into `~/.claude/skills`:
 ```sh
 git clone https://github.com/ejc3/claude-skills ~/claude-skills
 ln -s ~/claude-skills/pr-diligence ~/.claude/skills/pr-diligence
+ln -s ~/claude-skills/vercel-to-cloudflare ~/.claude/skills/vercel-to-cloudflare
 ```
 
 Claude Code picks up skills in `~/.claude/skills` at the start of a session.
