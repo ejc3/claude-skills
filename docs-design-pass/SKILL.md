@@ -62,8 +62,8 @@ to the chart PRs; prose PRs leave them alone, so the two never collide.
   not fit at the floor fails the generator instead of shrinking.
 - **Contrast in both themes.** Text 4.5:1 against what is drawn behind it,
   marks 3:1 against the page, with the SVG's own dark-mode rules applied.
-  `scripts/svg-audit.mjs` checks this; wire it into the repo's tests over every
-  committed SVG so a new chart cannot opt out.
+  `<skill-dir>/scripts/svg-audit.mjs` checks this; wire it into the repo's
+  tests over every committed SVG so a new chart cannot opt out.
 - **Colour means one thing.** A series colour must not reuse a heat-ramp hue
   (a reader who knows the heat charts reads it as ×100) or another tool's
   identity colour. A non-ranking comparison gets a neutral tint, never green and
@@ -104,11 +104,12 @@ its markers fails the generator.
   A caveat is stated once, where it applies; a limitation is never dropped.
 - Fairness: where a non-recommended option wins a row, every summary that keeps
   the comparison keeps that win.
-- No number changes value. `scripts/numcheck.mjs <base> <doc>...` fails on any
-  added number and lists removed ones; each removal must be a repeat the owning
-  doc still states, and each addition (e.g. a renamed `12x` → `12×`, or a number
+- No number changes value. `node <skill-dir>/scripts/numcheck.mjs <base> <doc>...`
+  fails on any added number and lists removed ones; each removal must be a
+  repeat the owning doc still states, and each addition (e.g. a renamed `12x` → `12×`, or a number
   moved in from its owning doc) is listed with its source field.
-- `scripts/linkcheck.mjs` on every doc, with GitHub's slug rules.
+- `node <skill-dir>/scripts/linkcheck.mjs <doc>...` on every doc, with GitHub's
+  slug rules.
 - Splitting sentences adds words. If the word count did not fall, the cuts are
   not done; the cross-doc concision review (below) is where the savings are.
 
@@ -172,14 +173,32 @@ exact head:
   and its source), or `DISAGREE: <evidence>` (a claim rejected with data; e.g. a
   bot quoting a stale external limit gets the live page quoted back). Resolve
   the thread after answering.
-- Run the repository's gate script (for example `make review-gate PR=<n>`)
-  before calling a PR ready; CI posts the same verdict as a required status.
+- If the repository has a merge-gate script or Makefile target, run it before
+  calling a PR ready (for example `make review-gate PR=<n>`), and wait for the
+  CI status that reports the same verdict where there is one. If it has none,
+  check each item above by hand.
 - Report the PR ready. Merge only when the user authorizes that merge.
 
 ## Files
 
-- `scripts/svg-audit.mjs`: legibility audit (text size, text and mark contrast,
-  both themes). `node svg-audit.mjs [--min-text 9] [--min-box-text 11] *.svg`,
-  or import `auditSvg` into the repo's test.
-- `scripts/numcheck.mjs`: number-preservation check for prose edits.
-- `scripts/linkcheck.mjs`: relative-link and anchor checker, GitHub slug rules.
+`<skill-dir>` is this skill's own directory, `~/.claude/skills/docs-design-pass`
+in a default install. The scripts live in `<skill-dir>/scripts/`, apart from any
+`scripts/` directory of the repository being worked on.
+
+- `<skill-dir>/scripts/svg-audit.mjs`: legibility audit (text size, text and
+  mark contrast, both themes).
+  `node <skill-dir>/scripts/svg-audit.mjs [--min-text 9] [--min-box-text 11] [--grid-color '#e4e8ec'] *.svg`,
+  or import `auditSvg` into the repo's test. Exit 1 on any issue, 2 on a usage
+  or read error.
+- `<skill-dir>/scripts/numcheck.mjs`: number-preservation check for prose
+  edits, `node <skill-dir>/scripts/numcheck.mjs <base-ref> <doc.md>...`. Exit 1
+  on an added number, 2 when the check could not run (bad ref, not a git
+  repository).
+- `<skill-dir>/scripts/linkcheck.mjs`: relative-link and anchor checker, GitHub
+  slug rules, `node <skill-dir>/scripts/linkcheck.mjs <doc.md>...`.
+- `<skill-dir>/scripts/test-svg-audit.mjs`, `test-numcheck.mjs` and
+  `test-linkcheck.mjs`: one test file per script, on fixtures in a temp
+  directory (the numcheck and linkcheck tests build a throwaway git repository).
+  Run them all with
+  `for t in <skill-dir>/scripts/test-*.mjs; do node "$t" || break; done`
+  (one `node` call runs one file); each file exits 1 on any failure.
