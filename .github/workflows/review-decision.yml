@@ -1,0 +1,107 @@
+name: Review decision
+
+# Separate from ci.yml so that editing a PR description re-runs only this cheap
+# check. ci.yml deliberately does not listen for `edited`; re-running a full
+# build and browser suite because someone fixed a typo in the body would be
+# absurd.
+on:
+  pull_request:
+    types: [opened, edited, synchronize, reopened]
+
+permissions:
+  contents: read
+  pull-requests: read
+
+concurrency:
+  group: review-decision-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  review-decision:
+    name: review decision
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require explicit review decisions
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+
+          # Read the body from the API rather than the event payload: on an
+          # `edited` event the payload carries the change, and this way the
+          # check always sees the description as it currently stands.
+          body=$(gh pr view "$PR_NUMBER" --repo "$REPO" --json body -q .body)
+
+          # Ignore HTML comments and fenced code blocks. A PR body legitimately
+          # contains examples of these very tokens -- this one does -- and the
+          # template's guidance must not satisfy its own gate. Only a token on a
+          # bare line counts as a decision.
+          visible=$(printf '%s\n' "$body" | awk '
+            /^[[:space:]]*```/ {fence = !fence; next}
+            fence {next}
+            /<!--/ {comment = 1}
+            !comment {print}
+            /-->/ {comment = 0}')
+
+          fail=0
+
+          check() {
+            token="$1"; command="$2"
+            ran="^[[:space:]]*${token}:[[:space:]]*ran([[:space:]]|$)"
+            skip_any="^[[:space:]]*${token}:[[:space:]]*skipped"
+            skip_ok="${skip_any}[[:space:]]*[-–—:][[:space:]]*[^[:space:]]"
+
+            n_ran=$(printf '%s\n' "$visible" | grep -ciE "$ran" || true)
+            n_skip=$(printf '%s\n' "$visible" | grep -ciE "$skip_any" || true)
+
+            # An unedited template carries both lines. Requiring exactly one is
+            # what makes this a decision rather than a formality.
+            if [ "$n_ran" -gt 0 ] && [ "$n_skip" -gt 0 ]; then
+              echo "::error::Both '${token}: ran' and '${token}: skipped' are present. Delete the one that does not apply."
+              fail=1; return
+            fi
+
+            if [ "$n_ran" -gt 0 ]; then
+              echo "${command} was run for this change."
+              return
+            fi
+
+            if printf '%s\n' "$visible" | grep -qiE "$skip_ok"; then
+              echo "${command} deliberately skipped:"
+              printf '%s\n' "$visible" | grep -iE "$skip_ok" | sed 's/^/  /'
+              return
+            fi
+
+            if [ "$n_skip" -gt 0 ]; then
+              echo "::error::'${token}: skipped' needs a reason after a dash or colon."
+            else
+              echo "::error::No '${token}:' decision in the PR description. Add '${token}: ran' or '${token}: skipped — <reason>'."
+            fi
+            fail=1
+          }
+
+          check "Code-Review" "/code-review"
+          check "Simplify" "/simplify"
+
+          if [ "$fail" -ne 0 ]; then
+            cat >&2 <<'MSG'
+
+          Nobody approves pull requests in this repository, so /code-review and
+          /simplify are the only review a substantive change gets. Decide,
+          rather than letting the default decide for you.
+
+          Add one line for each to the PR body:
+
+            Code-Review: ran
+            Code-Review: skipped — <reason>
+
+            Simplify: ran
+            Simplify: skipped — <reason>
+
+          Skipping is fine for a typo, a revert or a docs tweak. Writing down
+          why is the point. See CLAUDE.md for what usually warrants each.
+          MSG
+            exit 1
+          fi

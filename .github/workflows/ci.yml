@@ -1,0 +1,53 @@
+name: CI
+
+# Draft PRs run nothing: iterate as a draft and mark it ready when done, and CI
+# runs once instead of once per push.
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review, converted_to_draft]
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  review-gate:
+    # The gate's own suite -- one case per fail-open hole it has had. A job of
+    # its own, so nothing it depends on can skip it, and a skipped required
+    # check counts as passed.
+    name: review-gate (self-test)
+    if: (github.event_name != 'pull_request' || !github.event.pull_request.draft)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: The gate must be able to fail
+        run: |
+          set -euo pipefail
+          # Discovered, not listed. A test added beside the gate and wired to
+          # nothing lets its subject regress with CI green; every
+          # `test-<script>.sh` here runs its subject, so the pairing is the
+          # list. `failglob` means a directory that loses its tests fails here
+          # rather than quietly checking one less thing.
+          shopt -s failglob
+          suites=()
+          for dir in .claude/skills/pr-review-gate; do
+            for suite in "$dir"/test-*.sh; do suites+=("$suite"); done
+          done
+          for suite in "${suites[@]}"; do
+            name=$(basename "$suite")
+            subject="$(dirname "$suite")/${name#test-}"
+            test -f "$subject"
+            echo "== $suite $subject"
+            # `failed=0` is not enough on its own: a suite that ran nothing
+            # also reports no failures. Assert it actually executed cases.
+            out=$(bash "$suite" "$subject")
+            echo "$out"
+            grep -qE '(passed=[1-9][0-9]* failed=0|[1-9][0-9]* passed, 0 failed)' <<<"$out"
+          done
