@@ -1,11 +1,13 @@
 ---
 name: apple-hig-review
-description: Use when asked to compare an app's experience with Apple's Human Interface Guidelines (iOS, iPadOS, macOS, watchOS or visionOS, any year's release), to do a design review of a SwiftUI/UIKit/AppKit app, or to run "a team of researchers" over an Apple-platform UI. Parallel reviewers, each owning one area, research the current guidelines, judge real screenshots and the code, and return ranked, cited, file:line findings that are then consolidated into one report.
+description: Use when asked to compare an app's experience with Apple's Human Interface Guidelines (iOS, iPadOS, macOS, watchOS or visionOS, any year's release), to do a design review of a SwiftUI/UIKit/AppKit app, to review a website or web app as it runs in mobile Safari and Chrome (iOS and Android), or to run "a team of researchers" over an app's UI. Parallel reviewers, each owning one area, research the current guidelines from authoritative sources, judge real screenshots and the code, and return ranked, cited, file:line findings that are then consolidated into one report.
 ---
 
 # Apple HIG review
 
-The reader is the app's owner, deciding what to fix first. Every finding names the rule,
+The reader is the app's owner, deciding what to fix first. For a website or web app, in
+mobile Safari, Chrome or both, read `web.md` as well: it sets which sources and rules apply
+on the web, how to capture real browsers, and the web checklist. Every finding names the rule,
 cites the Apple source it came from, points at the line of code, and says exactly what to
 change. A finding that is the reviewer's own judgment says so. Nothing is pushed, opened or
 merged without the user's go-ahead for that step.
@@ -52,12 +54,20 @@ Each reviewer gets the same skeleton, filled in for its area:
 
 - **Role and date:** "a senior Apple-platform design researcher; today is <date>".
 - **Research instruction:** research what is current for the named releases and verify
-  claims against Apple sources, citing URLs:
+  claims against authoritative sources, citing URLs:
   - the HIG pages at developer.apple.com/design/human-interface-guidelines (each page also
     has a JSON form that fetches reliably);
   - the "What's new" design pages;
+  - Apple's API documentation on developer.apple.com, for what an API does and which OS
+    it needs;
   - that year's WWDC design and SwiftUI sessions;
-  - Apple Support guides, for how Apple's own apps actually behave on that release.
+  - Apple Support guides, for how Apple's own apps actually behave on that release;
+  - for a web area, the sources in `web.md` (WCAG 2.2, the HTML and CSS specs, WebKit,
+    Chrome for Developers, Material 3, MDN).
+
+  A must-fix or should-fix rests on one of these. Press reports, blogs, forum answers and
+  the reviewer's memory can prompt a check but are not evidence: label such a claim
+  unverified, or test it on a device. A rule quoted from a source names the page.
 - **The app:** one paragraph on what it is and does.
 - **The area:** the exact files (with the main types in each), the screenshots by
   absolute path, and any known bug visible in them, so it is not "discovered" again.
@@ -162,6 +172,11 @@ If asked to fix:
 
 - `scripts/capture.sh`: screenshots of a physical iOS device, the booted simulator, or the
   Mac, downscaled for review.
+- `web.md`: the web flavor (mobile Safari and Chrome): the order of authority between
+  WCAG, the browser and platform conventions, the sources, real-browser captures, and the
+  web checklist.
+- `scripts/capture-web.mjs`: emulated phone screenshots of web pages in WebKit and Blink,
+  light and dark, reduced motion and 320 px reflow (Playwright).
 
 ## Gotchas
 
