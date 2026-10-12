@@ -2344,3 +2344,54 @@ test("GEOM a rect whose rx clamps unequally (elliptical corners) strokes over a 
   has(out, /^light: "\." #000000 at 1\.00:1/);
   has(out, /^dark: "\." #ffffff at 1\.00:1/);
 });
+
+// ---- review: a mark's cover is tested against its painted stroke, not its reach box -------------
+
+test("COVER a butt-capped line under a later rect of exactly its band is covered", () => {
+  // the band of a 2px line (10,50)-(90,50) with butt caps is x 10..90, y 49..51
+  const line = `<line x1="10" y1="50" x2="90" y2="50" stroke="#000000" stroke-width="2"/>`;
+  const out = issuesOf(
+    doc(line + `<rect x="10" y="49" width="80" height="2" fill="#777777"/>`),
+  );
+  has(
+    out,
+    /^light: line stroke is covered by a rect drawn after it \(fill #777777\)/,
+  );
+  has(
+    out,
+    /^dark: line stroke is covered by a rect drawn after it \(fill #777777\)/,
+  );
+});
+test("COVER a round or square cap reaches past the rect: the same segment is not covered", () => {
+  for (const cap of ["round", "square"]) {
+    const out = issuesOf(
+      doc(
+        `<polyline points="10,50 90,50" fill="none" stroke="#000000" stroke-width="2" stroke-linecap="${cap}"/><rect x="10" y="49" width="80" height="2" fill="#777777"/>`,
+      ),
+    );
+    assert.deepEqual(out, [], cap);
+  }
+  // a rect over the caps as well covers it
+  has(
+    issuesOf(
+      doc(
+        `<polyline points="10,50 90,50" fill="none" stroke="#000000" stroke-width="2" stroke-linecap="square"/><rect x="9" y="49" width="82" height="2" fill="#777777"/>`,
+      ),
+    ),
+    /^light: polyline stroke is covered by a rect/,
+  );
+});
+test("COVER a join counts only at a vertex: a bent polyline is covered when its join's reach is", () => {
+  // two 2px segments meeting at (50,50); the miter join reaches 4px around the vertex
+  const bent = `<polyline points="10,50 50,50 50,90" fill="none" stroke="#000000" stroke-width="2"/>`;
+  has(
+    issuesOf(
+      doc(bent + `<rect x="10" y="46" width="44" height="44" fill="#777777"/>`),
+    ),
+    /^light: polyline stroke is covered by a rect drawn after it/,
+  );
+  // the bands alone, without the join's reach, are not taken as covered
+  none(
+    doc(bent + `<rect x="10" y="49" width="41" height="41" fill="#777777"/>`),
+  );
+});

@@ -64,7 +64,9 @@
 // two straight arms count as clear of its stroke. Such approximations can only add
 // issues. Hiding is under-approximated the same way: a stroke hides a mark only within
 // one segment's band, a circle's ring or a rect's band with its inside taken square, so a
-// mark hidden only by a join, a cap or several shapes together is not reported.
+// mark hidden only by a join, a cap or several shapes together is not reported. A stroked
+// line, polyline or path is hidden when one later shape holds the bounds of each piece it
+// paints: each segment's band with its caps, and each join (at a vertex only) at its reach.
 //
 // auditSvg returns the issue strings; `.notes` on the returned array lists the
 // assumptions made (for example the page colour used when the SVG draws no background).
@@ -857,21 +859,29 @@ const polyHolds = (g, b) =>
   !g.subpaths.some(({ pts }) =>
     pts.some((p, i) => bandMeets(p, pts[(i + 1) % pts.length], 0, 0, 0, b)),
   ) && winding(g.subpaths, [(b[0] + b[2]) / 2, (b[1] + b[3]) / 2]) !== 0;
-// does the band of half width d around segment a-b, extended by e0 before a and e1
-// after b (a butt or square cap), meet the box? (separating axes; touching is apart)
-const bandMeets = (a, b, d, e0, e1, box) => {
+// the corners of the band of half width d around segment a-b, extended by e0 before a
+// and e1 after b (a butt or square cap); null for a zero-length segment
+const bandCorners = (a, b, d, e0, e1) => {
   const L = Math.hypot(b[0] - a[0], b[1] - a[1]);
-  if (!L) return false;
+  if (!L) return null;
   const ux = (b[0] - a[0]) / L;
   const uy = (b[1] - a[1]) / L;
   const ends = [
     [a[0] - ux * e0, a[1] - uy * e0],
     [b[0] + ux * e1, b[1] + uy * e1],
   ];
-  const band = ends.flatMap(([x, y]) => [
+  return ends.flatMap(([x, y]) => [
     [x - uy * d, y + ux * d],
     [x + uy * d, y - ux * d],
   ]);
+};
+// does that band meet the box? (separating axes; touching is apart)
+const bandMeets = (a, b, d, e0, e1, box) => {
+  const band = bandCorners(a, b, d, e0, e1);
+  if (!band) return false;
+  const L = Math.hypot(b[0] - a[0], b[1] - a[1]);
+  const ux = (b[0] - a[0]) / L;
+  const uy = (b[1] - a[1]) / L;
   const B = corners(box);
   for (const [ax, ay] of [
     [1, 0],
@@ -1553,6 +1563,41 @@ export function auditSvg(
         g.kind === "poly" ? strokeForm(e, theme).reach : half(e, theme),
       );
     });
+  // where a path, line or polyline stroke paints: each segment's band of half width d,
+  // extended by e0 before a and e1 after c for a square cap, as { a, c, e0, e1 }, and as
+  // discs { at, r } each round cap, each join (only at a vertex where two segments meet,
+  // taken as a disc of the join's largest reach) and each dot a zero-length subpath draws
+  // with a round or square cap
+  const strokePieces = (e, theme) =>
+    memo(e, `pieces ${theme}`, () => {
+      const d = half(e, theme);
+      const { cap, joinReach } = strokeForm(e, theme);
+      const bands = [];
+      const discs = [];
+      for (const { pts, closed } of geom(e).subpaths) {
+        const n = pts.length;
+        const moves = pts.some((p) => p[0] !== pts[0][0] || p[1] !== pts[0][1]);
+        if (!moves) {
+          if (cap !== "butt") discs.push({ at: pts[0], r: Math.SQRT2 * d });
+          continue;
+        }
+        const segs = closed ? n : n - 1;
+        const sq = (end) => (!closed && end && cap === "square" ? d : 0);
+        for (let i = 0; i < segs; i++)
+          bands.push({
+            a: pts[i],
+            c: pts[(i + 1) % n],
+            e0: sq(i === 0),
+            e1: sq(i === segs - 1),
+          });
+        for (let i = 0; i < n; i++) {
+          const end = !closed && (i === 0 || i === n - 1);
+          const r = end ? (cap === "round" ? d : 0) : joinReach;
+          if (r > 0) discs.push({ at: pts[i], r });
+        }
+      }
+      return { bands, discs };
+    });
   // does the shape's stroke paint inside box b? Exact for rect and circle bands and for
   // straight segments with butt, square or round caps; a join counts as a disc of its
   // largest reach around the vertex
@@ -1572,29 +1617,29 @@ export function auditSvg(
           )
         )
       );
-    const { cap, joinReach } = strokeForm(e, theme);
-    for (const { pts, closed } of g.subpaths) {
-      const n = pts.length;
-      const moves = pts.some((p) => p[0] !== pts[0][0] || p[1] !== pts[0][1]);
-      if (!moves) {
-        // a zero-length subpath: a dot for a round or square cap
-        if (cap !== "butt" && discMeets(pts[0], Math.SQRT2 * d, b)) return true;
-        continue;
-      }
-      const segs = closed ? n : n - 1;
-      for (let i = 0; i < segs; i++) {
-        const a = pts[i];
-        const c = pts[(i + 1) % n];
-        const sq = (end) => (!closed && end && cap === "square" ? d : 0);
-        if (bandMeets(a, c, d, sq(i === 0), sq(i === segs - 1), b)) return true;
-      }
-      for (let i = 0; i < n; i++) {
-        const end = !closed && (i === 0 || i === n - 1);
-        const radius = end ? (cap === "round" ? d : 0) : joinReach;
-        if (radius > 0 && discMeets(pts[i], radius, b)) return true;
-      }
-    }
-    return false;
+    const { bands, discs } = strokePieces(e, theme);
+    return (
+      bands.some(({ a, c, e0, e1 }) => bandMeets(a, c, d, e0, e1, b)) ||
+      discs.some(({ at, r }) => discMeets(at, r, b))
+    );
+  };
+  // boxes that together hold all a channel paints, as a mark whose cover is tested: its
+  // reach box for a fill and for a rect or circle stroke (the exact bounds there), and for
+  // a path, line or polyline stroke the bounds of each band and each disc of
+  // strokePieces, not the reach box, which a miter join's reach widens on every side
+  const paintBoxes = (e, ch, theme) => {
+    const box = reachBox(e, ch, theme);
+    if (!box) return [];
+    if (ch === "fill" || geom(e).kind !== "poly") return [box];
+    const d = half(e, theme);
+    const { bands, discs } = strokePieces(e, theme);
+    return [
+      ...bands
+        .map(({ a, c, e0, e1 }) => bandCorners(a, c, d, e0, e1))
+        .filter(Boolean)
+        .map((pts) => union(pts.map(([x, y]) => [x, y, x, y]))),
+      ...discs.map(({ at, r }) => grow([at[0], at[1], at[0], at[1]], r)),
+    ];
   };
   const channelMeets = (e, ch, b, theme) =>
     ch === "fill"
@@ -2091,11 +2136,16 @@ export function auditSvg(
         const g = geom(e);
         const box = reachBox(e, ch, theme);
         // paint drawn after the mark over all of it hides it (a text's glyph cells are
-        // bounds, not ink: a text hides no mark)
+        // bounds, not ink: a text hides no mark). All of it is every piece it paints,
+        // not its reach box
+        const pieces = paintBoxes(e, ch, theme);
         for (const c of paintedAfter(
           e,
           theme,
-          (l, lch) => l.tag !== "text" && channelHolds(l, lch, box, theme),
+          (l, lch) =>
+            l.tag !== "text" &&
+            pieces.length > 0 &&
+            pieces.every((b) => channelHolds(l, lch, b, theme)),
         ))
           out.push(coveredBy(theme, `${e.tag} ${ch}`, c));
         const region = {

@@ -462,3 +462,49 @@ test("DEF a footnote definition's text is not a link destination", () => {
   expectClean(check("text[^1]\n\n[^1]: a footnote here\n"), 0);
   expectClean(check("text[^n]\n\n[^n]:\n    continued note\n"), 0);
 });
+
+// ---- review: link destinations with nested parentheses ---------------------------------------------------------
+
+test("PAREN a destination with three levels of balanced parentheses is read and checked", () => {
+  expectBroken(
+    check("[broken](missing(and(bar)).md)\n"),
+    1,
+    /a\.md:1: missing file missing\(and\(bar\)\)\.md/,
+  );
+  expectClean(check("[ok](f(a(b(c))).md)\n", { "f(a(b(c))).md": "x\n" }), 1);
+});
+test("PAREN backslash-escaped parentheses and an escaped > in <...> are part of the destination", () => {
+  expectClean(
+    check("[a](f\\(x.md) [b](g\\).md) [c](<h\\>.md>)\n", {
+      "f(x.md": "x\n",
+      "g).md": "x\n",
+      "h>.md": "x\n",
+    }),
+    3,
+  );
+  expectBroken(check("[a](nope\\(x.md)\n"), 1, /missing file nope\(x\.md/);
+});
+test("PAREN an unbalanced destination is not a link", () => {
+  expectClean(check("[u](a(b.md)\n[v](c(d.md\n"), 0);
+});
+test("PAREN a heading's link text is kept when its destination nests parentheses", () => {
+  expectClean(
+    check("[1](b.md#see-docs)\n", { "b.md": "# See [docs](a(b(c)).md)\n" }),
+    1,
+  );
+});
+
+// ---- review: a duplicate heading's slug skips every slug already assigned -----------------------------------------
+
+test("SLUG headings foo, foo, foo-1 get foo, foo-1, foo-1-1", () => {
+  expectClean(
+    check("[1](#foo) [2](#foo-1) [3](#foo-1-1)\n\n# foo\n# foo\n# foo-1\n"),
+    3,
+  );
+});
+test("SLUG headings foo-1, foo, foo get foo-1, foo, foo-2", () => {
+  expectClean(
+    check("[1](#foo-1) [2](#foo) [3](#foo-2)\n\n# foo-1\n# foo\n# foo\n"),
+    3,
+  );
+});

@@ -18,9 +18,11 @@
 //     not list from an ordinary word, and a changed unit must not pass, so rewording the
 //     word after a number reads as a changed number: the editor justifies it.
 //     `%` and `×` need no space, so "5 %" is not "5%".
+//   - after a hyphen: the same rule as after a space ("a 10-ms delay" = "a 10 ms delay",
+//     "5-fold" = "5 fold", "a 2-to-1 ratio" keeps 2 bare). A hyphen before digits is a
+//     range ("10-20").
 //   - count nouns (COUNT_NOUNS below: "files", "tasks", "apps", "cores", "days", ...)
-//     match singular or plural and with a hyphen ("64 cores" = "64-core"); any other
-//     word after a hyphen is not a unit ("5-fold" is 5).
+//     match singular or plural ("64 cores" = "64-core").
 // A number may carry an exponent with its sign: 1e-6, 1e+6 and 1e6 are three numbers.
 // A vulgar fraction is a number, alone or after digits (½, 1½), as is 1⁄2 (fraction slash).
 // "3x4" and "5/10" are numbers without units. A minus sign counts only when no letter or
@@ -131,10 +133,13 @@ const unitAt = (rest) => {
   const m = TAIL.exec(rest);
   if (!m) return "";
   const { sp, hy, tok } = m.groups;
+  // a hyphen after a space is a dash, not a joiner ("5 -fold")
+  if (hy && sp) return "";
   const noun = NOUN_FORM.get(tok);
-  if (hy) return !sp && noun ? noun : ""; // "64-core": only a count noun takes a hyphen
   if (noun) return noun;
-  if (!sp) return tok;
+  // attached: always the unit. A hyphenated word ("10-ms", "5-fold") is read as a spaced
+  // one, so "a 10-ms delay" = "a 10 ms delay" and "a 2-to-1 ratio" keeps 2 bare
+  if (!sp && !hy) return tok;
   if (WORD_UNITS.includes(tok)) return tok;
   if (!hasLetter.test(tok)) return "";
   if (/[°/]/.test(tok) || acronym.test(tok)) return tok;

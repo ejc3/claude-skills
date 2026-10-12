@@ -113,8 +113,9 @@ its markers fails the generator.
   any added number and lists removed ones; each removal must be a repeat the
   owning doc still states, and each addition (e.g. a renamed `12x` → `12×`, or a
   number moved in from its owning doc) is listed with its source field. A number
-  keeps the word after it, with any exponent (`m²`, `s⁻¹`), as its unit
-  (function words aside), so a reworded unit word (`10 milliseconds` → `10 ms`,
+  keeps the word after it, after a space or a hyphen (`10 ms` = `10-ms`) and
+  with any exponent (`m²`, `s⁻¹`), as its unit (function words aside), so a
+  reworded unit word (`10 milliseconds` → `10 ms`,
   `12 apps` → `12 applications`) reads as a changed number and is justified like
   any other addition.
 - The link check (linkcheck) runs on every doc, with GitHub's slug rules.
@@ -213,8 +214,9 @@ in a default install. The scripts live in `<skill-dir>/scripts/`, apart from any
 - `<skill-dir>/scripts/test-svg-audit.mjs`, `test-numcheck.mjs` and
   `test-linkcheck.mjs`: one `node:test` file per script, on fixtures in a temp
   directory (the numcheck and linkcheck tests build a throwaway git repository).
-  Each file exits non-zero on any failure; one `node` call runs one file, so run
-  them all with:
+  Each file exits non-zero on any failure; one `node` call runs one file. CI
+  (`.github/workflows/ci.yml`, job `docs-design-pass (tests)`) runs every
+  `test-*.mjs` here and fails when none is found. Locally:
 
   ```sh
   for t in <skill-dir>/scripts/test-*.mjs; do node "$t" || exit 1; done

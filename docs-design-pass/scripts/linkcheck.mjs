@@ -1,16 +1,19 @@
 #!/usr/bin/env node
 // Relative-link and #anchor checker for markdown, using GitHub's heading-slug rules
 // (code kept as text, HTML tags such as <app> dropped, emphasis markers dropped,
-// duplicate headings suffixed; ATX and setext headings, <a name>/id anchors).
+// duplicate headings suffixed -1, -2, ... skipping any slug already taken, so foo, foo,
+// foo-1 are foo, foo-1, foo-1-1; ATX and setext headings, <a name>/id anchors).
 //   node linkcheck.mjs <doc.md>...   (exit 1 on any broken link, 2 on a usage or read error)
 //
 // Link forms read: [t](dest), [t](dest "title"), [t](dest 'title'), [t](<dest with spaces>),
-// ![alt](src), and `[ref]: dest` definitions (the dest may start the next line; a definition
-// with no destination defines nothing). Full [t][label] and collapsed [label][]
-// reference usages must name a definition (labels match case-insensitively, whitespace
-// collapsed); a shortcut [label] is ordinary text unless a definition exists, and then the
-// definition's destination is what gets checked. A destination starting with `/` is
-// repository-root-relative: it resolves against the git top-level of the doc.
+// ![alt](src) (a bare dest may nest balanced parentheses to any depth or escape them with
+// `\`; an unbalanced one is not a link), and `[ref]: dest` definitions (the dest may
+// start the next line; a definition with no destination defines nothing). Full
+// [t][label] and collapsed [label][] reference usages must name a definition (labels
+// match case-insensitively, whitespace collapsed); a shortcut [label] is ordinary text
+// unless a definition exists, and then the definition's destination is what gets
+// checked. A destination starting with `/` is repository-root-relative: it resolves
+// against the git top-level of the doc.
 // `?query` is ignored and `#L10` / `#L10-L20` line anchors are accepted.
 import { readFileSync, statSync } from "node:fs";
 import { spawnSync } from "node:child_process";
@@ -44,11 +47,17 @@ const decodeEntities = (s) =>
 // kept verbatim, HTML tags and emphasis markers dropped, backslash escapes resolved.
 function headingText(raw) {
   const keep = [];
-  const hold = (s) => `\u0000${keep.push(s) - 1}\u0000`;
+  // a placeholder of private-use characters, which a link destination may contain
+  const hold = (s) => `\ue000${keep.push(s) - 1}\ue001`;
   let t = raw
     .replace(/(`+)([\s\S]*?[^`])\1(?!`)/g, (_, __, code) => hold(code.trim()))
-    .replace(/\\([!-/:-@[-`{-~])/g, (_, c) => hold(c))
-    .replace(/!?\[([^\]]*)\]\([^)]*\)/g, "$1")
+    .replace(/\\([!-/:-@[-`{-~])/g, (_, c) => hold(c));
+  t = inlineLinks(t)
+    .reduceRight(
+      (acc, { start, end, text }) =>
+        acc.slice(0, start) + text + acc.slice(end),
+      t,
+    )
     .replace(/!?\[([^\]]*)\]\[[^\]]*\]/g, "$1")
     .replace(/<[^>]+>/g, "");
   t = decodeEntities(t);
@@ -58,7 +67,7 @@ function headingText(raw) {
     /(?<![\p{L}\p{N}_])(_{1,3})(?=\S)([\s\S]*?\S)\1(?![\p{L}\p{N}_])/gu,
     "$2",
   );
-  return t.replace(/\u0000(\d+)\u0000/g, (_, i) => keep[+i]);
+  return t.replace(/\ue000(\d+)\ue001/g, (_, i) => keep[+i]);
 }
 
 // Every line as [index, text], with a fenced block (``` or ~~~, closed by the same
@@ -103,12 +112,18 @@ function anchors(file) {
   if (anchorsCache.has(file)) return anchorsCache.get(file);
   const text = readFileSync(file, "utf8");
   const set = new Set();
+  // a duplicate gets the first free `-n` suffix after the last one its base used, probed
+  // against every slug assigned so far: foo, foo, foo-1 → foo, foo-1, foo-1-1
   const seen = new Map();
   const add = (txt) => {
-    const s = slug(headingText(txt));
-    const n = seen.get(s) || 0;
-    seen.set(s, n + 1);
-    set.add(n ? `${s}-${n}` : s);
+    const base = slug(headingText(txt));
+    let s = base;
+    while (set.has(s)) {
+      const n = (seen.get(base) ?? 0) + 1;
+      seen.set(base, n);
+      s = `${base}-${n}`;
+    }
+    set.add(s);
   };
   const kept = [];
   let para = []; // consecutive paragraph lines: a setext underline turns them into a heading
@@ -140,10 +155,59 @@ function anchors(file) {
   return set;
 }
 
-// [text](dest "title"): dest is <angle> or bare with one level of balanced parentheses;
-// the title is "…", '…' or (…); the link must close with `)`
-const LINK =
-  /\]\(\s*(?:<([^>]*)>|((?:[^\s()]|\([^\s()]*\))*))(?:\s+(?:"[^"]*"|'[^']*'|\([^)]*\)))?\s*\)/g;
+// backslash escapes of ASCII punctuation, resolved
+const unescape = (s) => s.replace(/\\([!-/:-@[-`{-~])/g, "$1");
+// the inline link whose `](` is at s[i] (CommonMark 0.31.2 §6.3): its destination, in
+// <...> (no unescaped < or >) or bare (no space or control character; parentheses
+// balanced at any depth or backslash-escaped), then an optional title "…", '…' or (…)
+// after whitespace, then `)`. → { dest, end } with end just past the `)`, else null
+// (an unbalanced or unclosed destination is not a link)
+function linkTail(s, i) {
+  const SPACE = /[ \t]/;
+  let j = i + 2;
+  while (SPACE.test(s[j] ?? "")) j++;
+  let dest;
+  if (s[j] === "<") {
+    const from = ++j;
+    for (; j < s.length && s[j] !== ">"; j++) {
+      if (s[j] === "<") return null;
+      if (s[j] === "\\" && j + 1 < s.length) j++;
+    }
+    if (j >= s.length) return null;
+    dest = s.slice(from, j++);
+  } else {
+    const from = j;
+    let depth = 0;
+    for (; j < s.length; j++) {
+      const c = s[j];
+      if (c === "\\" && /[!-/:-@[-`{-~]/.test(s[j + 1] ?? "")) j++;
+      else if (c === "(") depth++;
+      else if (c === ")") {
+        if (!depth) break;
+        depth--;
+      } else if (/[\x00-\x20\x7f]/.test(c)) break;
+    }
+    if (depth) return null;
+    dest = s.slice(from, j);
+  }
+  const title =
+    /^(?:[ \t]+(?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|\((?:\\.|[^()\\])*\)))?[ \t]*\)/.exec(
+      s.slice(j),
+    );
+  if (!title) return null;
+  return { dest: unescape(dest), end: j + title[0].length };
+}
+// the inline links and images on one line: [{ start, end, text, dest }], start at the
+// opening `[` (or `!`), text the bracketed text. Link text holds no brackets here
+function inlineLinks(s) {
+  const out = [];
+  for (const m of s.matchAll(/!?\[([^\]]*)\]\(/g)) {
+    if (out.length && m.index < out.at(-1).end) continue;
+    const tail = linkTail(s, m.index + m[0].length - 2);
+    if (tail) out.push({ start: m.index, end: tail.end, text: m[1], ...tail });
+  }
+  return out;
+}
 
 const noCode = (line) =>
   line.replace(/(`+)[\s\S]*?\1/g, (m) => " ".repeat(m.length));
@@ -180,7 +244,15 @@ function linkDests(line, next = "") {
   const out = [];
   const dest = definition(line, next)?.dest;
   if (dest !== undefined) out.push(dest);
-  for (const m of noCode(line).matchAll(LINK)) out.push(m[1] ?? m[2]);
+  const text = noCode(line);
+  let end = 0;
+  for (const m of text.matchAll(/\]\(/g)) {
+    if (m.index < end) continue; // inside the link before it
+    const tail = linkTail(text, m.index);
+    if (!tail) continue;
+    end = tail.end;
+    out.push(tail.dest);
+  }
   return out;
 }
 

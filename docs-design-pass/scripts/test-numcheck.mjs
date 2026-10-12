@@ -190,10 +190,11 @@ test("a slash after a unit is a separator: 4.5s/2.2s = 4.5s / 2.2s, 90 MB/s = 90
   assert.equal(edit("yarn 4.5s/2.2s\n", "yarn 4.5ms/2.2s\n").status, 1);
   assert.equal(edit("at 90 MB/s\n", "at 90MB/s\n").status, 0);
 });
-test("a hyphen attaches only a count noun (10-20 and 5-minute)", () => {
+test("a hyphen before digits is a range; before a word it attaches the unit (10-20, 5-minute, 5-fold)", () => {
   assert.equal(edit("10-20 times\n", "10 and 20 times\n").status, 0);
   assert.equal(edit("a 5 minute wait\n", "a 5-minute wait\n").status, 0);
-  assert.equal(edit("a 5-fold gain\n", "a gain of 5.\n").status, 0);
+  // "fold" is the unit of 5, as it is in "5 fold": dropping it reads as a changed number
+  assert.equal(edit("a 5-fold gain\n", "a gain of 5.\n").status, 1);
 });
 test("a spaced symbol alone is not a unit (10 / 20, 5 x 3)", () => {
   assert.equal(edit("10 / 20\n", "10/20\n").status, 0);
@@ -482,3 +483,34 @@ test("FRAC an unchanged ½ ms, 1½ h and 1⁄2 ms are unchanged", () => {
   assert.equal(r.status, 0, r.stdout + r.stderr);
   assert.match(r.stdout, /unchanged numbers/);
 });
+
+// ---- review: a hyphenated word after a number is its unit by the spaced rule ----------------------
+
+for (const [a, b, added] of [
+  ["a 10-ms delay", "a 10-s delay", "10s"],
+  ["a 4-GHz part", "a 4-MHz part", "4MHz"],
+  ["a 5-fold gain", "a 5-times gain", "5times"],
+  ["a 2-way merge", "a 2-step merge", "2step"],
+  ["a 64-bit build", "a 64-byte build", "64byte"],
+]) {
+  test(`HYPHEN "${a}" -> "${b}" is an added number`, () => {
+    const r = edit(`${a} here\n`, `${b} here\n`);
+    assert.equal(r.status, 1, r.stdout + r.stderr);
+    assert.match(r.stdout, new RegExp(`ADDED .*${added}`));
+  });
+}
+for (const [a, b] of [
+  ["a 10-ms delay", "a 10 ms delay"],
+  ["a 10-ms delay", "a 10ms delay"],
+  ["a 5-fold gain", "a 5 fold gain"],
+  ["a 64-bit build", "a 64 bit build"],
+  ["a 64-core box", "64 cores"],
+  ["a 5-minute wait", "5 minutes"],
+  ["a 2-to-1 ratio", "a 2 to 1 ratio"],
+  ["10-20 times", "10 and 20 times"],
+]) {
+  test(`HYPHEN "${a}" and "${b}" read as the same number`, () => {
+    const r = edit(`${a} here\n`, `${b} here\n`);
+    assert.equal(r.status, 0, r.stdout + r.stderr);
+  });
+}
