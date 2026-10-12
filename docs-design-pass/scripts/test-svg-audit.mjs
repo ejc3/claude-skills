@@ -45,6 +45,8 @@ const issuesOf = (svgText, opt) => [...audit(svgText, opt)];
 
 // ---- fixtures -------------------------------------------------------------------------------
 
+// the font family list a chart generator writes on the root
+const FONT = `font-family="system-ui,-apple-system,Segoe UI,Helvetica,Arial,sans-serif"`;
 const DARK = `@media (prefers-color-scheme: dark){rect[fill="#ffffff"]{fill:#0d1117}text[fill="#1c2330"]{fill:#e2e7ec}}`;
 const BG_ONLY = `@media (prefers-color-scheme: dark){rect[fill="#ffffff"]{fill:#0d1117}}`;
 const BG = `<rect width="200" height="100" fill="#ffffff"/>`;
@@ -54,7 +56,7 @@ const svg = ({
   body = "",
   head = `width="200" height="100" viewBox="0 0 200 100"`,
 }) =>
-  `<svg xmlns="http://www.w3.org/2000/svg" ${head}>\n<style>${style}</style>\n${bg}\n${body}\n</svg>`;
+  `<svg xmlns="http://www.w3.org/2000/svg" ${head} ${FONT}>\n<style>${style}</style>\n${bg}\n${body}\n</svg>`;
 const text = (s, extra = `fill="#1c2330"`, x = 10, y = 20) =>
   `<text x="${x}" y="${y}" font-size="12" ${extra}>${s}</text>`;
 const has = (issues, re) =>
@@ -98,7 +100,7 @@ const PRETTY = `
       fill: #0d1117;
     }
     text[fill='#1c2330'] {
-      fill: #1c2330; /* text left dark on a dark page */
+      fill: #1c2330;
     }
   }
 `;
@@ -108,6 +110,12 @@ test("F2 control: compact dark rules flag dark text left dark", () => {
 });
 test("F2 whitespace, newlines and single quotes in the dark block are parsed", () => {
   has(issuesOf(svg({ style: PRETTY, body: text("x") })), /^dark: "x"/);
+});
+test("F2 a comment in <style> is unsupported", () => {
+  has(
+    issuesOf(svg({ style: `/* recolours */${DARK}`, body: text("x") })),
+    /^unsupported CSS comment in <style>/,
+  );
 });
 test("F2 spacing variants of the media query are accepted", () => {
   const style = `@media (prefers-color-scheme:dark){rect[fill="#ffffff"]{fill:#0d1117}}`;
@@ -151,27 +159,27 @@ test("F2 a bare tag selector in the dark block is reported", () => {
 test("F2 a rule outside the dark block is reported", () => {
   has(
     issuesOf(svg({ style: `text{fill:#000}`, body: text("x") })),
-    /unsupported selector "text".*outside/,
+    /^unsupported CSS "text": only @media \(prefers-color-scheme: dark\) blocks are read/,
   );
 });
 test("F2 another @media block is reported", () => {
   const style = `@media (max-width: 400px){text{font-size:8px}}`;
   has(
     issuesOf(svg({ style, body: text("x") })),
-    /unsupported "@media \(max-width: 400px\)"/,
+    /unsupported CSS "@media \(max-width: 400px\)"/,
   );
 });
 
 test("F2 an @import is reported, alone or ahead of a rule", () => {
   has(
     issuesOf(svg({ style: `@import url(x.css);`, body: text("x") })),
-    /unsupported "@import url\(x\.css\);"/,
+    /unsupported CSS "@import url\(x\.css\);"/,
   );
   has(
     issuesOf(
       svg({ style: `@import url(x.css); text{fill:#000}`, body: text("x") }),
     ),
-    /unsupported "@import url\(x\.css\); text"/,
+    /unsupported CSS "@import url\(x\.css\); text"/,
   );
 });
 
@@ -188,7 +196,7 @@ test("F3 a background rect with x=0 y=0 is the page", () => {
   has([...out], /^dark: "x"/); // dark page is #0d1117 (from the rule), the text stays dark
   assert.deepEqual(out.notes, []);
 });
-test("F3 an SVG with only a viewBox and a 100% background rect is audited", () => {
+test("F3 an SVG with only a viewBox, or a 100% background rect, is unsupported", () => {
   const out = audit(
     svg({
       style: BG_ONLY,
@@ -197,10 +205,13 @@ test("F3 an SVG with only a viewBox and a 100% background rect is audited", () =
       body: text("x"),
     }),
   );
-  has([...out], /^dark: "x"/);
-  assert.deepEqual(out.notes, []);
+  has(
+    [...out],
+    /^unsupported <svg> without a numeric width, height and viewBox/,
+  );
+  has([...out], /^unsupported width="100%" on <rect>/);
 });
-test("F3 width=100% with a viewBox and a numeric background rect is audited", () => {
+test("F3 width=100% on the root is unsupported", () => {
   const out = audit(
     svg({
       style: BG_ONLY,
@@ -208,7 +219,7 @@ test("F3 width=100% with a viewBox and a numeric background rect is audited", ()
       body: text("x"),
     }),
   );
-  has([...out], /^dark: "x"/);
+  has([...out], /^unsupported width="100%" on <svg>/);
 });
 test("F3 no background rect: white and #0d1117 pages are assumed and reported", () => {
   const out = audit(
@@ -229,17 +240,17 @@ test("F3 no background rect: white and #0d1117 pages are assumed and reported", 
 
 // ---- finding 4: text size and ink --------------------------------------------------------------------
 
-test("F4 font-size with px units is checked", () => {
+test("F4 font-size with px units is unsupported", () => {
   has(
     issuesOf(
       svg({
         body: `<text x="10" y="20" font-size="8px" fill="#1c2330">tiny</text>`,
       }),
     ),
-    /"tiny" is 8px/,
+    /^unsupported font-size="8px" on <text>/,
   );
 });
-test("F4 font-size in any unit but px, and keywords, are reported as unreadable", () => {
+test("F4 font-size in any unit, and keywords, are unsupported", () => {
   const sizes = ["6pt", "0.5em", "50%", "small", "1rem"];
   const body = sizes
     .map(
@@ -248,33 +259,33 @@ test("F4 font-size in any unit but px, and keywords, are reported as unreadable"
     )
     .join("");
   const out = issuesOf(svg({ body }));
-  sizes.forEach((v, i) =>
+  sizes.forEach((v) =>
     has(
       out,
-      new RegExp(
-        `^"u${i}" has a font-size the audit cannot read \\(${v.replace(".", "\\.")}\\)`,
-      ),
+      new RegExp(`^unsupported font-size="${v.replace(".", "\\.")}" on <text>`),
     ),
   );
 });
-test("F4 a unitless font-size and a style-attribute px size are read", () => {
+test("F4 a unitless font-size is read; a style attribute on text is unsupported", () => {
   const body =
     `<text x="10" y="20" font-size="7.5" fill="#1c2330">bare</text>` +
     `<text x="10" y="40" style="font-size:6px" fill="#1c2330">css</text>`;
   const out = issuesOf(svg({ body }));
   has(out, /"bare" is 7\.5px/);
-  has(out, /"css" is 6px/);
+  has(out, /^unsupported attribute style on <text>/);
 });
-test("F4 a dark rule that shrinks the font-size is audited in the dark theme", () => {
+test("F4 a font-size in the dark rules is unsupported", () => {
   const style = `@media (prefers-color-scheme: dark){rect[fill="#ffffff"]{fill:#0d1117}text[fill="#1c2330"]{fill:#e2e7ec;font-size:7px}}`;
-  const out = issuesOf(svg({ style, body: text("x") }));
-  assert.deepEqual(out, [`dark: "x" is 7px (floor 9px)`]);
+  has(
+    issuesOf(svg({ style, body: text("x") })),
+    /^unsupported CSS declaration "font-size:7px" in the dark rules/,
+  );
 });
-test("F4 a dark rule with an unreadable font-size is reported", () => {
+test("F4 a dark rule with a font-size in em is unsupported", () => {
   const style = `@media (prefers-color-scheme: dark){rect[fill="#ffffff"]{fill:#0d1117}text[fill="#1c2330"]{fill:#e2e7ec;font-size:1em}}`;
   has(
     issuesOf(svg({ style, body: text("x") })),
-    /^dark: "x" has a font-size the audit cannot read \(1em\)/,
+    /^unsupported CSS declaration "font-size:1em" in the dark rules/,
   );
 });
 test("F4 an unreadable font-size is reported, not passed", () => {
@@ -284,27 +295,30 @@ test("F4 an unreadable font-size is reported, not passed", () => {
         body: `<text x="10" y="20" font-size="calc(1px+2px)" fill="#1c2330">odd</text>`,
       }),
     ),
-    /"odd".*font-size/,
+    /^unsupported font-size="calc\(1px\+2px\)" on <text>/,
   );
 });
-test("F4 font-size inherited from a <g> is checked", () => {
+test("F4 font-size on a <g> is unsupported", () => {
   has(
     issuesOf(
       svg({
         body: `<g font-size="8"><text x="10" y="20" fill="#1c2330">small</text></g>`,
       }),
     ),
-    /"small" is 8px/,
+    /^unsupported attribute font-size on <g>/,
   );
 });
-test("F4 fill inherited from a <g> is checked", () => {
+test("F4 fill on a <g> is unsupported", () => {
   const body = `<g fill="#cccccc"><text x="10" y="20" font-size="12">pale</text></g>`;
-  has(issuesOf(svg({ body })), /^light: "pale" #cccccc/);
+  has(issuesOf(svg({ body })), /^unsupported attribute fill on <g>/);
 });
-test("F4 a dark rule on the <g> recolours an inheriting text", () => {
+test("F4 a dark rule selecting a <g> is unsupported", () => {
   const style = `@media (prefers-color-scheme: dark){rect[fill="#ffffff"]{fill:#0d1117}g[fill="#1c2330"]{fill:#e2e7ec}}`;
   const body = `<g fill="#1c2330"><text x="10" y="20" font-size="12">ink</text></g>`;
-  assert.deepEqual(issuesOf(svg({ style, body })), []);
+  has(
+    issuesOf(svg({ style, body })),
+    /^unsupported selector "g\[fill="#1c2330"\]"/,
+  );
 });
 test("F4 <tspan> runs are outside the subset: reported, never passed", () => {
   const body =
@@ -323,14 +337,14 @@ test("F4 text without a fill is black in both themes, so it fails on the dark pa
 test("F4 fill:none text draws nothing and is not flagged", () => {
   assert.deepEqual(issuesOf(svg({ body: text("ghost", `fill="none"`) })), []);
 });
-test("F4 an unreadable fill on text is reported", () => {
+test("F4 a url() fill on text is unsupported", () => {
   has(
     issuesOf(svg({ body: text("grad", `fill="url(#g)"`) })),
-    /"grad" has a fill the audit cannot read/,
+    /^unsupported fill="url\(#g\)" on <text>/,
   );
 });
-test("F4 style attribute and entities in text are read", () => {
-  const body = `<text x="10" y="20" style="font-size:8px;fill:#cccccc">a &amp; b</text>`;
+test("F4 entities in text are read", () => {
+  const body = `<text x="10" y="20" font-size="8" fill="#cccccc">a &amp; b</text>`;
   const out = issuesOf(svg({ body }));
   has(out, /"a & b" is 8px/);
   has(out, /^light: "a & b" #cccccc/);
@@ -408,10 +422,10 @@ test("F6 a small tile's outline and a hollow dot's stroke are flagged", () => {
     "the page-coloured centre is not a mark",
   );
 });
-test("F6 stroke inherited from a <g> is checked", () => {
+test("F6 stroke on a <g> is unsupported", () => {
   has(
     marks(`<g stroke="#dddddd"><line x1="0" y1="50" x2="100" y2="50"/></g>`),
-    /^light: line stroke #dddddd/,
+    /^unsupported attribute stroke on <g>/,
   );
 });
 test("F6 grid hairlines in the default grid colour are exempt", () => {
@@ -476,7 +490,7 @@ test("F6 a solid bar is checked and a thin stripe is not", () => {
 
 // ---- finding 8: translucent marks, and which rects frame text ---------------------------------------
 
-test("F8 a translucent near-white bar on white is flagged", () => {
+test("F8 a translucent near-white bar on white is flagged; fill-opacity is unsupported", () => {
   has(
     marks(
       `<rect x="5" y="30" width="40" height="20" fill="rgba(0,0,0,0.04)"/>`,
@@ -487,29 +501,35 @@ test("F8 a translucent near-white bar on white is flagged", () => {
     marks(
       `<rect x="5" y="30" width="40" height="20" fill="#dddddd" fill-opacity="0.5"/>`,
     ),
-    /^light: rect fill #dddddd \(50% opaque\)/,
+    /^unsupported attribute fill-opacity on <rect>/,
   );
 });
-test("F8 a stroke-opacity 0.5 pale series line is flagged", () => {
+test("F8 a half-transparent pale series line is flagged; stroke-opacity is unsupported", () => {
+  has(
+    marks(
+      `<line x1="0" y1="50" x2="100" y2="50" stroke="rgba(170,170,170,0.5)"/>`,
+    ),
+    /^light: line stroke rgba\(170,170,170,0\.5\) \(50% opaque\) at/,
+  );
   has(
     marks(
       `<line x1="0" y1="50" x2="100" y2="50" stroke="#aaaaaa" stroke-opacity="0.5"/>`,
     ),
-    /^light: line stroke #aaaaaa \(50% opaque\) at/,
+    /^unsupported attribute stroke-opacity on <line>/,
   );
 });
-test("F8 a line inside a group with opacity 0.3 is flagged", () => {
+test("F8 opacity on a group is unsupported", () => {
   has(
     marks(
       `<g opacity="0.3"><line x1="0" y1="50" x2="100" y2="50" stroke="#555555"/></g>`,
     ),
-    /^light: line stroke #555555 \(30% opaque\) at/,
+    /^unsupported attribute opacity on <g>/,
   );
 });
 test("F8 a translucent mark that still reaches 3:1 passes", () => {
   assert.deepEqual(
     marks(
-      `<line x1="0" y1="50" x2="100" y2="50" stroke="#000000" stroke-opacity="0.8"/>`,
+      `<line x1="0" y1="50" x2="100" y2="50" stroke="rgba(0,0,0,0.8)"/>`,
       undefined,
       { style: "" },
     ),
@@ -519,11 +539,11 @@ test("F8 a translucent mark that still reaches 3:1 passes", () => {
 test("F8 a translucent mark is composited over each theme's own page", () => {
   const style = `@media (prefers-color-scheme: dark){rect[fill="#ffffff"]{fill:#0d1117}}`;
   const out = marks(
-    `<line x1="0" y1="50" x2="100" y2="50" stroke="#cccccc" stroke-opacity="0.5"/>`,
+    `<line x1="0" y1="50" x2="100" y2="50" stroke="rgba(204,204,204,0.5)"/>`,
     undefined,
     { style },
   );
-  has(out, /^light: line stroke #cccccc \(50% opaque\)/);
+  has(out, /^light: line stroke rgba\(204,204,204,0\.5\) \(50% opaque\)/);
   assert.ok(!out.some((i) => /^dark:/.test(i)), JSON.stringify(out));
 });
 test("F8 a bordered 200x20 bar with no text inside is flagged on fill and stroke", () => {
@@ -622,10 +642,10 @@ test("F7 a line has no fill channel and an explicit fill:none shape is not a mar
     [],
   );
 });
-test("F7 an inherited fill overrides the initial value", () => {
-  assert.deepEqual(
+test("F7 a fill on a <g> is unsupported, not inherited", () => {
+  has(
     marks(`<g fill="none"><circle cx="20" cy="70" r="4"/></g>`),
-    [],
+    /^unsupported attribute fill on <g>/,
   );
 });
 
@@ -843,7 +863,7 @@ test("G1 text in hsl() and space-separated rgb() is contrast-checked", () => {
   has(marks(text("a", `fill="hsl(0 0% 86%)"`)), /^light: "a" hsl/);
   has(marks(text("b", `fill="rgb(220 220 220 / 100%)"`)), /^light: "b" rgb/);
 });
-test("G1 a colour the audit cannot read on a mark is an issue in each theme", () => {
+test("G1 a colour form outside the subset on a mark is unsupported", () => {
   for (const bad of [
     "url(#grad)",
     "var(--ink)",
@@ -854,19 +874,20 @@ test("G1 a colour the audit cannot read on a mark is an issue in each theme", ()
     "rgb(1, 2 3)",
     "rgb(1 2 3 / 0.5 / 1)",
     "notacolour",
+    "currentColor",
   ]) {
     const out = marks(line(bad));
-    has(out, /^light: line stroke has a colour the audit cannot read/);
-    has(out, /^dark: line stroke has a colour the audit cannot read/);
     assert.ok(
-      out.some((i) => i.includes(`(${bad})`)),
+      out.includes(
+        `unsupported stroke="${bad}" on <line>: the audit cannot verify it`,
+      ),
       JSON.stringify(out),
     );
   }
 });
-test("G1 an unreadable fill on a rect and on a circle is an issue, with exit 1 from the CLI", () => {
+test("G1 a url() fill on a circle is unsupported, with exit 1 from the CLI", () => {
   const body = `<circle cx="20" cy="70" r="4" fill="url(#g)"/>`;
-  has(marks(body), /^light: circle fill has a colour the audit cannot read/);
+  has(marks(body), /^unsupported fill="url\(#g\)" on <circle>/);
   const f = chartFile("unreadable.svg", svg({ body }));
   expectExit(cli(f), 1, /FAIL/);
 });
@@ -874,11 +895,10 @@ test("G1 transparent and none draw nothing and are not issues", () => {
   assert.deepEqual(marks(line("transparent")), []);
   assert.deepEqual(marks(text("t", `fill="transparent"`)), []);
 });
-test("G1 currentColor resolves through color", () => {
-  has(
-    marks(`<g color="gainsboro">${line("currentColor")}</g>`),
-    /^light: line stroke gainsboro at /,
-  );
+test("G1 currentColor and the color attribute are unsupported", () => {
+  const out = marks(`<g color="gainsboro">${line("currentColor")}</g>`);
+  has(out, /^unsupported attribute color on <g>/);
+  has(out, /^unsupported stroke="currentColor" on <line>/);
 });
 test("G1 --grid-color accepts a named colour", () => {
   const f = chartFile("gridname.svg", svg({ body: line("gainsboro") }));
@@ -890,17 +910,19 @@ test("G1 --grid-color accepts a named colour", () => {
 
 const rules = (...r) =>
   `@media (prefers-color-scheme: dark){rect[fill="#ffffff"]{fill:#0d1117}${r.join("")}}`;
-test("G3 an attribute+tag rule beats a later attribute-only rule", () => {
+test("G3 an attribute-only selector is unsupported", () => {
   const style = rules(
     `text[fill="#000"]{fill:#000}`,
     `[fill="#000"]{fill:#fff}`,
   );
   const body = text("x", `fill="#000"`);
-  has(issuesOf(svg({ style, body })), /^dark: "x" #000 at/);
+  const out = issuesOf(svg({ style, body }));
+  has(out, /^unsupported selector "\[fill="#000"\]"/);
+  has(out, /^dark: "x" #000 at/);
 });
-test("G3 the same rules in the other order resolve the same way", () => {
+test("G3 a later tag[attr] rule wins over an earlier one", () => {
   const style = rules(
-    `[fill="#000"]{fill:#fff}`,
+    `text[fill="#000"]{fill:#fff}`,
     `text[fill="#000"]{fill:#000}`,
   );
   has(
@@ -918,25 +940,21 @@ test("G3 equal specificity: the later rule wins", () => {
     [],
   );
 });
-test("G3 two attribute conditions beat a tag plus one condition", () => {
+test("G3 a selector with two attribute conditions is unsupported", () => {
   const style = rules(
     `[fill="#000"][font-size="12"]{fill:#fff}`,
     `text[fill="#000"]{fill:#000}`,
   );
-  assert.deepEqual(
+  has(
     issuesOf(svg({ style, body: text("x", `fill="#000"`) })),
-    [],
+    /^unsupported selector "\[fill="#000"\]\[font-size="12"\]"/,
   );
 });
-test("G3 specificity is per property: a lower rule still supplies a property the higher one omits", () => {
-  const style = rules(
-    `text[fill="#000"]{font-size:20px}`,
-    `[fill="#000"]{fill:#fff}`,
-  );
-  assert.deepEqual(
-    issuesOf(svg({ style, body: text("x", `fill="#000"`) })),
-    [],
-  );
+test("G3 a rule may set fill and stroke only", () => {
+  const style = rules(`text[fill="#000"]{font-size:20px;fill:#fff}`);
+  const out = issuesOf(svg({ style, body: text("x", `fill="#000"`) }));
+  has(out, /^unsupported CSS declaration "font-size:20px" in the dark rules/);
+  assert.ok(!out.some((i) => /^dark: "x"/.test(i)), JSON.stringify(out));
 });
 
 // ---- CLI -----------------------------------------------------------------------------------------------------------
@@ -1016,24 +1034,26 @@ test("BG a canvas rect filled in light and none in dark leaves the dark default 
 
 const CANVAS = (fill) => `<rect width="200" height="100" fill="${fill}"/>`;
 
-test("PG1 a full-canvas background with an unreadable paint is an issue in each theme", () => {
-  const out = issuesOf(
-    svg({
-      style: "",
-      bg: CANVAS("url(#g)"),
-      body: text("x", `fill="#000000"`),
-    }),
+test("PG1 a full-canvas background with a url() paint is unsupported", () => {
+  has(
+    issuesOf(
+      svg({
+        style: "",
+        bg: CANVAS("url(#g)"),
+        body: text("x", `fill="#000000"`),
+      }),
+    ),
+    /^unsupported fill="url\(#g\)" on <rect>/,
   );
-  has(out, /^light: .*full-canvas rect.*url\(#g\)/);
-  has(out, /^dark: .*full-canvas rect.*url\(#g\)/);
 });
-test("PG1 a dark rule that makes the background unreadable is an issue in dark only", () => {
+test("PG1 a dark rule that gives the background a url() paint is unsupported", () => {
   const style = `@media (prefers-color-scheme: dark){rect[fill="#ffffff"]{fill:url(#g)}}`;
-  const out = issuesOf(svg({ style, body: text("x", `fill="#000000"`) }));
-  has(out, /^dark: .*full-canvas rect.*url\(#g\)/);
-  assert.ok(!out.some((i) => /^light: .*full-canvas/.test(i)), String(out));
+  has(
+    issuesOf(svg({ style, body: text("x", `fill="#000000"`) })),
+    /^unsupported CSS declaration "fill:url\(#g\)" in the dark rules/,
+  );
 });
-test("PG1 an unreadable background fails the CLI", () => {
+test("PG1 a url() background fails the CLI", () => {
   const f = chartFile(
     "pg1.svg",
     svg({
@@ -1042,12 +1062,14 @@ test("PG1 an unreadable background fails the CLI", () => {
       body: text("x", `fill="#000000"`),
     }),
   );
-  expectExit(cli(f), 1, /full-canvas rect/);
+  expectExit(cli(f), 1, /unsupported fill="url\(#g\)"/);
 });
-test("PG1 a rect with an unreadable fill behind text is an issue", () => {
+test("PG1 a rect with a url() fill behind text is unsupported", () => {
   const body = `<rect x="5" y="5" width="100" height="40" fill="url(#g)"/>${text("x", `fill="#000000"`, 10, 30)}`;
-  const out = issuesOf(svg({ style: "", body }));
-  has(out, /^light: "x" .*url\(#g\)/);
+  has(
+    issuesOf(svg({ style: "", body })),
+    /^unsupported fill="url\(#g\)" on <rect>/,
+  );
 });
 
 const BOX = (fill, extra = "") =>
@@ -1134,15 +1156,12 @@ const FULL_BLACK = CANVAS("#000000");
 const plainSvg = (body, bg = WHITE) => svg({ style: "", bg, body });
 const unsupported = (body, re) => has(issuesOf(plainSvg(body)), re);
 
-test("S1 opacity on a <g> over two painted elements is unsupported", () => {
+test("S1 opacity on a <g> is unsupported", () => {
   const body = `<g opacity="0.5">${FULL_BLACK}${FULL_BLACK}</g>${text("x", `fill="#ffffff"`)}`;
-  has(
-    issuesOf(plainSvg(body)),
-    /^unsupported opacity on <g> over 2 painted elements/,
-  );
+  has(issuesOf(plainSvg(body)), /^unsupported attribute opacity on <g>/);
 });
-test("S1 opacity on a <g> over one painted element is modelled: white text on the gray composite", () => {
-  const body = `<g opacity="0.5">${FULL_BLACK}</g>${text("x", `fill="#ffffff"`)}`;
+test("S1 a half-transparent canvas is composited: white text on the gray composite", () => {
+  const body = `${CANVAS("rgba(0,0,0,0.5)")}${text("x", `fill="#ffffff"`)}`;
   const out = issuesOf(plainSvg(body));
   has(out, /^light: "x" #ffffff at 3\.98:1 \(needs 4\.5:1\)/);
   assert.ok(!out.some((i) => /unsupported/.test(i)), JSON.stringify(out));
@@ -1156,27 +1175,27 @@ test("S2 a canvas-sized stroke-only rect is mark-checked on its stroke", () => {
     /^light: rect stroke #dddddd at 1\.\d\d:1 \(marks need 3:1\)/,
   );
 });
-test("S2 a canvas-sized rect with a url() stroke is an unreadable paint", () => {
-  const out = issuesOf(svg({ style: "", bg: CANVAS_STROKE("url(#g)") }));
+test("S2 a canvas-sized rect with a url() stroke is unsupported", () => {
   has(
-    out,
-    /^light: rect stroke has a colour the audit cannot read \(url\(#g\)\)/,
-  );
-  has(
-    out,
-    /^dark: rect stroke has a colour the audit cannot read \(url\(#g\)\)/,
+    issuesOf(svg({ style: "", bg: CANVAS_STROKE("url(#g)") })),
+    /^unsupported stroke="url\(#g\)" on <rect>/,
   );
 });
 
-test("S3 an element with zero effective alpha drawn after the text does not cover it", () => {
+test("S3 an element with zero alpha drawn after the text does not cover it", () => {
   const ink = text("x", `fill="#000000"`, 10, 30);
   for (const cover of [
-    BOX("black", ` opacity="0"`),
-    BOX("black", ` fill-opacity="0"`),
     BOX("rgba(0,0,0,0)"),
-    `<rect width="200" height="100" fill="#000000" opacity="0"/>`,
+    BOX("transparent"),
+    BOX("#00000000"),
+    `<rect width="200" height="100" fill="rgba(0,0,0,0)"/>`,
   ])
     assert.deepEqual(issuesOf(plainSvg(ink + cover)), [], cover);
+  for (const attr of [` opacity="0"`, ` fill-opacity="0"`])
+    has(
+      issuesOf(plainSvg(ink + BOX("black", attr))),
+      /^unsupported attribute (fill-)?opacity on <rect>/,
+    );
 });
 
 test("S4 one paint stack: a full-canvas rect drawn over a local rect hides it", () => {
@@ -1196,13 +1215,17 @@ test("S6 a black path drawn after black text and over it covers it", () => {
 test("S6 a scale() transform is unsupported, not a 1.2px text read as 12px", () => {
   unsupported(
     `<g transform="scale(0.1)">${text("t", `fill="#000000"`)}</g>`,
-    /^unsupported transform scale\(0\.1\) on <g>/,
+    /^unsupported transform="scale\(0\.1\)" on <g>/,
   );
 });
-test("S6 a rotate() transform is unsupported", () => {
+test("S6 a rotate() transform is unsupported, and a transform on text at all", () => {
   unsupported(
-    `<text x="10" y="20" font-size="12" fill="#000000" transform="rotate(-90 10 20)">t</text>`,
-    /^unsupported transform rotate\(-90 10 20\) on <text>/,
+    `<g transform="rotate(-90 10 20)">${text("t", `fill="#000000"`)}</g>`,
+    /^unsupported transform="rotate\(-90 10 20\)" on <g>/,
+  );
+  unsupported(
+    `<text x="10" y="20" font-size="12" fill="#000000" transform="translate(1 1)">t</text>`,
+    /^unsupported attribute transform on <text>/,
   );
 });
 test("S6 <use> is unsupported", () => {
@@ -1224,18 +1247,21 @@ test("S6 <clipPath> and clip-path are unsupported", () => {
     ),
   );
   has(out, /^unsupported <clipPath>/);
-  has(out, /^unsupported clip-path on <rect>/);
+  has(out, /^unsupported attribute clip-path on <rect>/);
 });
 test("S6 a mask is unsupported", () => {
-  unsupported(
-    `<defs><mask id="m"><rect width="10" height="10" fill="#ffffff"/></mask></defs><rect x="5" y="5" width="40" height="40" fill="#000000" mask="url(#m)"/>`,
-    /^unsupported mask on <rect>/,
+  const out = issuesOf(
+    plainSvg(
+      `<defs><mask id="m"><rect width="10" height="10" fill="#ffffff"/></mask></defs><rect x="5" y="5" width="40" height="40" fill="#000000" mask="url(#m)"/>`,
+    ),
   );
+  has(out, /^unsupported <defs>/);
+  has(out, /^unsupported attribute mask on <rect>/);
 });
 test("S6 a filter is unsupported", () => {
   unsupported(
     `<defs><filter id="f"/></defs>${text("t", `fill="#000000" filter="url(#f)"`)}`,
-    /^unsupported filter on <text>/,
+    /^unsupported attribute filter on <text>/,
   );
 });
 test("S6 <tspan> is unsupported", () => {
@@ -1251,7 +1277,10 @@ test("S6 a curve command in a path is unsupported", () => {
   );
 });
 test("S6 text dx is unsupported", () => {
-  unsupported(text("t", `fill="#000000" dx="4"`), /^unsupported dx on <text>/);
+  unsupported(
+    text("t", `fill="#000000" dx="4"`),
+    /^unsupported attribute dx on <text>/,
+  );
 });
 
 // a fixture in the consumer charts' style: translate groups, an href wrapper, rgba cell
@@ -1309,4 +1338,318 @@ test("S9 a grid hairline under a text is decoration; a darker line under it is a
     `<line x1="30" y1="0" x2="30" y2="100" stroke="${stroke}"/>${text("label", `fill="#6b7885"`, 10, 30)}`;
   assert.deepEqual(issuesOf(plainSvg(under("#e4e8ec"))), []);
   has(issuesOf(plainSvg(under("#8794a1"))), /^light: "label" #6b7885 at/);
+});
+
+// ---- closure review 2: one regression test per finding ----------------------------------------
+
+// a document of the given size with a white canvas
+const doc = (body, { w = 100, h = 100, root = "", style = "" } = {}) =>
+  `<svg xmlns="http://www.w3.org/2000/svg" width="${w}" height="${h}" viewBox="0 0 ${w} ${h}" ${FONT}${root}>${style ? `<style>${style}</style>` : ""}<rect width="${w}" height="${h}" fill="#ffffff"/>${body}</svg>`;
+const darkRules = (r) => `@media (prefers-color-scheme: dark){${r}}`;
+const none = (svgText) => assert.deepEqual(issuesOf(svgText), []);
+
+test("C2-01 a font shorthand in a style attribute is unsupported", () => {
+  has(
+    issuesOf(
+      doc(`<text x="10" y="20" font-size="12" fill="#000000">x</text>`, {
+        root: ` style="font:1px Arial"`,
+      }),
+    ),
+    /^unsupported CSS declaration "font:1px Arial"/,
+  );
+  has(
+    issuesOf(
+      doc(`<text x="10" y="20" fill="#000000" style="font:1px Arial">x</text>`),
+    ),
+    /^unsupported attribute style on <text>/,
+  );
+});
+test("C2-02 root dimensions with units are unsupported", () => {
+  const s = doc(
+    `<text x="10" y="20" font-size="12" fill="#000000">x</text>`,
+  ).replace(`width="100" height="100"`, `width="1em" height="1em"`);
+  has(issuesOf(s), /^unsupported width="1em" on <svg>/);
+});
+test("C2-03 !important is unsupported", () => {
+  has(
+    issuesOf(
+      doc(`<text x="10" y="20" font-size="12" fill="#000000">x</text>`, {
+        style: darkRules(`text[fill="#000000"]{fill:#ffffff!important}`),
+      }),
+    ),
+    /^unsupported CSS !important/,
+  );
+});
+test("C2-04 a comment in a style attribute is unsupported", () => {
+  has(
+    issuesOf(
+      doc("", { root: ` style="/*c*/font-variant-numeric:tabular-nums"` }),
+    ),
+    /^unsupported CSS comment/,
+  );
+});
+test("C2-05 <style media> is unsupported", () => {
+  const s = doc(
+    `<text x="10" y="20" font-size="12" fill="#000000">x</text>`,
+  ).replace(
+    "<rect",
+    `<style media="print">${darkRules(`text[fill="#000000"]{fill:#ffffff}`)}</style><rect`,
+  );
+  has(issuesOf(s), /^unsupported attribute media on <style>/);
+});
+test("C2-06 CDATA is unsupported", () => {
+  has(
+    issuesOf(
+      doc(
+        `<text x="10" y="20" font-size="12" fill="#ffffff"><![CDATA[x]]></text>`,
+      ),
+    ),
+    /^unsupported CDATA section/,
+  );
+});
+test("C2-07 opacity, inherit or not, is unsupported", () => {
+  has(
+    issuesOf(
+      doc(
+        `<g opacity=".5"><text x="10" y="20" font-size="12" fill="#ffffff" opacity="inherit">x</text></g>`,
+      ),
+    ),
+    /^unsupported attribute opacity on <text>/,
+  );
+});
+test("C2-08 element opacity over fill and stroke is unsupported", () => {
+  has(
+    issuesOf(
+      doc(
+        `<rect x="10" y="10" width="80" height="80" fill="#000000" stroke="#000000" stroke-width="40" opacity=".5"/><text x="12" y="45" font-size="12" fill="#000000">x</text>`,
+      ),
+    ),
+    /^unsupported attribute opacity on <rect>/,
+  );
+});
+test("C2-09 text that paints nothing is not held to the size floor", () => {
+  none(doc(`<text x="10" y="20" font-size="1" fill="none">x</text>`));
+});
+test("C2-10 a text that paints nothing does not exempt the rect around it", () => {
+  const body = `<rect x="10" y="10" width="50" height="50" fill="#aaaaaa"/><text x="20" y="40" font-size="12" fill="none">x</text>`;
+  has(issuesOf(doc(body)), /^light: rect fill #aaaaaa at 2\.32:1/);
+  const lit = `<rect x="10" y="10" width="50" height="50" fill="#aaaaaa"/><text x="20" y="40" font-size="12" fill="#000000">x</text>`;
+  has(
+    issuesOf(doc(lit, { style: darkRules(`text[fill="#000000"]{fill:none}`) })),
+    /^dark: rect fill #aaaaaa at 2\.32:1/,
+  );
+});
+test("C2-11 group opacity is unsupported, whatever the group holds", () => {
+  has(
+    issuesOf(
+      doc(
+        `<g opacity=".9"><text x="10" y="20" font-size="12" fill="#000000">x</text><rect width="20" height="20" fill="none"/></g>`,
+      ),
+    ),
+    /^unsupported attribute opacity on <g>/,
+  );
+});
+test("C2-12 the figure-box floor applies in the theme whose rules make the box", () => {
+  const body = `<rect x="1" y="1" width="80" height="50" fill="#fefefe"/><text x="20" y="20" font-size="10" fill="#000000">x</text>`;
+  const out = issuesOf(
+    doc(body, { style: darkRules(`rect[fill="#fefefe"]{stroke:#000000}`) }),
+  );
+  has(out, /^dark: "x" is 10px inside a figure box \(floor 11px\)/);
+  assert.ok(
+    !out.some((i) => /^"x" is 10px inside/.test(i)),
+    JSON.stringify(out),
+  );
+});
+test("C2-13 a stroke the colour of the page fails at 1:1", () => {
+  has(
+    issuesOf(doc(`<line x1="10" y1="10" x2="90" y2="90" stroke="#ffffff"/>`)),
+    /^light: line stroke #ffffff at 1\.00:1/,
+  );
+});
+test("C2-14 a zero-width stroke paints nothing", () => {
+  none(
+    doc(
+      `<line x1="10" y1="10" x2="90" y2="90" stroke="#aaaaaa" stroke-width="0"/>`,
+    ),
+  );
+});
+test("C2-15 a butt cap ends at its endpoint: no cover beyond it", () => {
+  none(
+    doc(
+      `<text x="50" y="50" font-size="12" fill="#000000">A</text><line x1="10" y1="45" x2="45" y2="45" stroke="#000000" stroke-width="20"/>`,
+    ),
+  );
+});
+test("C2-16 <ellipse> is unsupported", () => {
+  has(
+    issuesOf(
+      doc(
+        `<ellipse cx="50" cy="50" rx="40" ry="10" fill="none" stroke="#000000"/>`,
+      ),
+    ),
+    /^unsupported <ellipse>/,
+  );
+});
+test("C2-17 a path with fewer than three vertices has no fill area", () => {
+  none(
+    doc(
+      `<text x="50" y="55" font-size="12" fill="#000000">A</text><path d="M0 0L100 100"/>`,
+    ),
+  );
+});
+test("C2-18 <polygon> is unsupported; a concave path is tested on its own area", () => {
+  has(
+    issuesOf(doc(`<polygon points="10,10 90,10 90,90 10,90" fill="#777777"/>`)),
+    /^unsupported <polygon>/,
+  );
+  none(
+    doc(
+      `<rect x="40" y="40" width="20" height="30" fill="#555555"/><path d="M10 10L90 10L90 90L70 90L70 30L30 30L30 90L10 90z" fill="#777777"/>`,
+    ),
+  );
+});
+test("C2-19 a filled path under a mark leaves its backdrop unverified", () => {
+  has(
+    issuesOf(
+      doc(
+        `<path d="M10 10L90 10L90 90L10 90z" fill="#555555"/><line x1="90" y1="20" x2="90" y2="80" stroke="#777777"/>`,
+      ),
+    ),
+    /^light: line stroke: cannot verify the backdrop \(a path drawn before it\)/,
+  );
+});
+test("C2-20 a stroke's backdrop includes its element's own fill", () => {
+  has(
+    issuesOf(
+      doc(
+        `<circle cx="50" cy="50" r="25" fill="#555555" stroke="#777777" stroke-width="4"/>`,
+      ),
+    ),
+    /^light: circle stroke #777777 at 1\.66:1/,
+  );
+});
+test("C2-21 an exponent in path data is a number, not a command", () => {
+  none(doc(`<path d="M10 10 9e1 90" stroke="#000000" fill="none"/>`));
+});
+test("C2-22 very long text and point lists are reported as too large, not thrown", () => {
+  const long = auditSvg(
+    doc(
+      `<text y="20" font-size="12" fill="#000000">${"x".repeat(130000)}</text>`,
+      { w: 2000000 },
+    ),
+  );
+  assert.ok(Array.isArray(long));
+  has([...long], /^too large: /);
+  const pts = auditSvg(
+    doc(
+      `<polyline points="${"0,0 ".repeat(130000)}" fill="none" stroke="#000000"/>`,
+    ),
+  );
+  assert.ok(Array.isArray(pts));
+  has([...pts], /^too large: /);
+});
+test("C2-23 deep nesting is reported as too large, not thrown", () => {
+  const out = auditSvg(doc("<g>".repeat(7000) + "</g>".repeat(7000)));
+  assert.ok(Array.isArray(out));
+  has([...out], /^too large: nesting/);
+});
+test("C2-24 an invalid entity is an issue, not a throw", () => {
+  has(
+    [
+      ...auditSvg(
+        doc(
+          `<text x="10" y="20" font-size="12" fill="#000000">&#1114112;</text>`,
+        ),
+      ),
+    ],
+    /^invalid entity &#1114112;/,
+  );
+});
+
+test("W1 text widths cover DejaVu Sans: a label that clears a bar in Arial but not in DejaVu is covered", () => {
+  // 10px "the whole workspace's source, once" from x=20 ends at 180.3 in Arial's metrics
+  // and at 200.6 in DejaVu Sans'; a bar drawn after it starts at 196
+  const body = `<text x="20" y="118" font-size="10" fill="#000000">the whole workspace's source, once</text><rect x="196" y="110" width="30" height="13" fill="#7a8899"/>`;
+  has(
+    issuesOf(doc(body, { w: 300, h: 200 })),
+    /^light: "the whole workspace's source, once" is covered by a rect drawn after it/,
+  );
+  // the same bar 10px further right clears it
+  none(doc(body.replace('x="196"', 'x="206"'), { w: 300, h: 200 }));
+});
+
+test("Z1 auditSvg returns an array for hundreds of random mutations of a chart, never throws", () => {
+  // a deterministic generator (mulberry32), so a failure reproduces
+  let seed = 0x5eed;
+  const rand = () => {
+    seed = (seed + 0x6d2b79f5) | 0;
+    let t = Math.imul(seed ^ (seed >>> 15), 1 | seed);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+  const pick = (a) => a[Math.floor(rand() * a.length)];
+  const bits = [
+    "<",
+    ">",
+    "/",
+    '"',
+    "'",
+    "=",
+    "&",
+    "&#0;",
+    "&#x110000;",
+    "&nbsp;",
+    ";",
+    "#",
+    "<g>",
+    "</g>",
+    "<![CDATA[",
+    "]]>",
+    "<!--",
+    "-->",
+    "{",
+    "}",
+    "@media",
+    "[",
+    "]",
+    "e9",
+    "-",
+    ".",
+    "1e400",
+    "NaN",
+    "z",
+    "C",
+    " ",
+    "\n",
+    "<text>",
+    "</text>",
+    "M",
+    "L",
+    "0",
+    "9".repeat(40),
+    "rgba(",
+    ")",
+    "translate(",
+    "url(#a)",
+  ];
+  for (let n = 0; n < 400; n++) {
+    let s = CONSUMER;
+    for (let k = 1 + Math.floor(rand() * 4); k > 0; k--) {
+      const at = Math.floor(rand() * s.length);
+      const len = Math.floor(rand() * 40);
+      const op = rand();
+      if (op < 0.35) s = s.slice(0, at) + s.slice(at + len);
+      else if (op < 0.7) s = s.slice(0, at) + pick(bits) + s.slice(at);
+      else
+        s =
+          s.slice(0, at) +
+          s.slice(at, at + len).repeat(1 + Math.floor(rand() * 20)) +
+          s.slice(at);
+    }
+    let out;
+    assert.doesNotThrow(() => {
+      out = auditSvg(s);
+    }, `mutation ${n}`);
+    assert.ok(Array.isArray(out) && Array.isArray(out.notes), `mutation ${n}`);
+  }
 });

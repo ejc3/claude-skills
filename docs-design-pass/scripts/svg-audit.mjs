@@ -11,42 +11,41 @@
 // Exits 1 when any file has an issue, 2 on a usage or read error. -h/--help prints usage.
 // Text needs 4.5:1, marks 3:1 (WCAG 2.x).
 //
-// The audit certifies only the subset of SVG it models exactly (SUBSET below) and reports
-// every construct outside it as an issue ("unsupported ...: the audit cannot verify it"):
-//   - elements: svg, g, a, rect, circle, ellipse, line, polyline, polygon, path, text,
-//     style, title, desc, and defs whose content nothing references;
-//   - path data: M L H V Z, absolute or relative, so a path's extent is its vertices;
-//   - transform: translate() only, accumulated through ancestors;
-//   - no clip-path, mask, filter, markers, display/visibility, text stroke, per-glyph
-//     placement (dx, dy, rotate, x/y lists, textLength, writing-mode, letter-spacing);
-//   - opacity on a <g>/<a> only when its subtree paints one element (group compositing is
-//     not modelled); opacity, fill-opacity and stroke-opacity on a shape or text.
-// What is read: presentation attributes, `style="..."` attributes, and the dark rules
-// (`@media (prefers-color-scheme: dark){ tag[attr="value"]{prop:value} }`, any
-// whitespace, any number of rules and blocks). fill, stroke, font-size and the like
-// inherit through ancestors, with SVG's initial values when nothing declares them (an
-// unset fill is black, so a shape with no fill is a black box or mark); lengths and
-// font-size take px or a unitless number. A stylesheet rule the audit cannot interpret
-// (class or bare-tag selector, a rule outside the dark block, another @media) is reported.
-// Colours read: #rgb[a], #rrggbb[aa], the 148 CSS named colours, rgb()/rgba()/hsl()/hsla()
-// (comma or space separated, `/` alpha, % channels, hue units). Any other paint on a
-// painted element (a gradient `url(#g)`, `var(...)`, `color(...)`, `lab()`) is an issue.
-// Overlapping dark rules resolve by specificity (attribute conditions (0,1,0) each, a tag
-// name (0,0,1)), source order breaking ties. `!important` is not modelled.
-// One paint stack, in document order. A text's box is estimated from its anchor,
-// text-anchor, font-size and per-glyph cells: Arial's and Arial Bold's advance widths
-// (the metrics Helvetica and Liberation Sans share), widened 10% because system-ui can
-// resolve to a wider face (DejaVu Sans runs about 13% wider than Arial). Its backdrop is
-// the default page and every filled rect drawn before it that holds all its glyphs; a
-// rect fill or a stroke (other than a grid hairline) drawn before it under only some
-// glyphs is composited both ways, so the text must read on either side. A filled non-rect
-// shape drawn before it under a glyph, and anything painted after it over a glyph, are
-// issues. A mark's backdrop at each of its sample points (vertices, segment midpoints,
-// centres) is the default page and every fill drawn before it that contains the point.
-// An element with an effective alpha of 0 paints nothing and is ignored.
+// The audit certifies only an allowlisted subset of SVG (SUBSET below: the elements,
+// attributes, value forms and stylesheet forms a chart generator emits) and reports
+// everything else as "unsupported ...: the audit cannot verify it". In short: a root
+// <svg> whose numeric width and height equal its viewBox; g (translate() only), a,
+// rect, circle, line, polyline and path (M L H V Z), text with plain x/y; fill, stroke,
+// stroke-width, font-size, font-weight, text-anchor and font-family as attributes; one
+// form of stylesheet, `@media (prefers-color-scheme: dark){ tag[fill|stroke="v"]{fill|
+// stroke: colour} }`. No opacity in any form, no CSS comments or !important, no CDATA.
+// Colours: #rgb[a], #rrggbb[aa], the 148 CSS named colours, rgb()/rgba()/hsl()/hsla().
+// Input past fixed limits (size, element count, nesting, list length) is "too large".
+//
+// One paint stack, in document order. Backdrops come from rects: a text's or mark's
+// backdrop is every colour the rects painted before it composite to over the region it
+// paints (each region of the plane cut by the rects' edges is composited on its own, so
+// the darkest and the lightest backdrop both count), over the theme's default page.
+// A stroke drawn before a text under its glyphs is composited both ways, except a grid
+// hairline; a mark is not checked against other marks' strokes under it (marks that
+// cross); a stroke's own element's fill is part of its backdrop. A filled circle, path
+// or polyline drawn before a text or mark it overlaps is an issue (its coverage is not
+// modelled), as is anything painted after a text over its glyphs.
+// A text's glyph cells are estimated per character from its anchor, text-anchor and
+// font-size. Each advance lies between 90% of the narrower and the wider of Arial
+// widened 10% and DejaVu Sans (regular or bold), and each glyph reaches as high and as
+// low as the highest and lowest of them, from Liberation Sans (Arial's metrics) and
+// DejaVu Sans measured on their font files; each cell spans every place its glyph can
+// land within those bounds. font-family may name only Helvetica, Arial, Liberation Sans,
+// DejaVu Sans, sans-serif and the system UI faces (system-ui, -apple-system, Segoe UI),
+// which are taken to fall within the same bounds, not measured. Covering is
+// over-approximated where geometry is not exact: a mitred join reaches 4 half widths
+// around its vertex (the default miter limit) and a rounded rect's stroke corner is taken
+// as square. Such approximations can only add issues.
 //
 // auditSvg returns the issue strings; `.notes` on the returned array lists the
 // assumptions made (for example the page colour used when the SVG draws no background).
+// It never throws on any input string.
 
 import { readFileSync, realpathSync } from "node:fs";
 import { fileURLToPath } from "node:url";
@@ -57,76 +56,6 @@ const THEMES = ["light", "dark"];
 const FALLBACK_PAGE = { light: [255, 255, 255], dark: [13, 17, 23] };
 const FALLBACK_NOTE =
   "no background rect: assuming a #ffffff page in light and #0d1117 in dark";
-
-// SVG properties the audit reads: inherited or not, and the initial value that applies
-// when neither the element, an ancestor nor a rule declares one
-const PROPS = {
-  fill: { inherit: true, initial: "black" },
-  stroke: { inherit: true, initial: "none" },
-  "fill-opacity": { inherit: true, initial: "1" },
-  "stroke-opacity": { inherit: true, initial: "1" },
-  opacity: { inherit: false, initial: "1" },
-  "font-size": { inherit: true, initial: "16" },
-  "font-weight": { inherit: true, initial: "normal" },
-  "text-anchor": { inherit: true, initial: "start" },
-  "stroke-width": { inherit: true, initial: "1" },
-  "stroke-linecap": { inherit: true, initial: "butt" },
-  "stroke-linejoin": { inherit: true, initial: "miter" },
-  "stroke-miterlimit": { inherit: true, initial: "4" },
-  "fill-rule": { inherit: true, initial: "nonzero" },
-  color: { inherit: true, initial: "black" },
-};
-
-// ---- the supported subset ----------------------------------------------------------------
-// What the audit models exactly. Anything else in the drawn tree is an issue.
-const SUBSET = {
-  // drawn shapes → the channels they paint, in report order
-  shapes: new Map(
-    Object.entries({
-      rect: ["fill", "stroke"],
-      circle: ["fill", "stroke"],
-      ellipse: ["fill", "stroke"],
-      polyline: ["stroke", "fill"],
-      polygon: ["stroke", "fill"],
-      path: ["stroke", "fill"],
-      line: ["stroke"],
-    }),
-  ),
-  // transparent containers below the root <svg>
-  containers: new Set(["g", "a"]),
-  // not drawn; <defs> only while nothing references its content
-  inert: new Set(["style", "title", "desc", "defs"]),
-  // straight segments only: a path's extent is exactly its vertices
-  pathCommands: new Set([..."MmLlHhVvZz"]),
-  // attributes and properties whose effect is not modelled, on any element
-  props: new Set([
-    "clip-path",
-    "clip",
-    "mask",
-    "filter",
-    "marker",
-    "marker-start",
-    "marker-mid",
-    "marker-end",
-    "display",
-    "visibility",
-    "mix-blend-mode",
-    "paint-order",
-    "dx",
-    "dy",
-    "rotate",
-    "textLength",
-    "lengthAdjust",
-    "writing-mode",
-    "letter-spacing",
-    "word-spacing",
-    "baseline-shift",
-    "dominant-baseline",
-    "alignment-baseline",
-  ]),
-};
-// shapes whose grid-coloured stroke is a gridline or rule
-const HAIRLINES = new Set(["line", "path", "polyline"]);
 
 const lum = ([r, g, b]) => {
   const f = (c) => (
@@ -274,292 +203,453 @@ const parseColor = (s) => {
 };
 const over = (top, bottom) =>
   top.rgb.map((c, i) => c * top.a + bottom[i] * (1 - top.a));
-const withAlpha = (c, k) => (c ? { ...c, a: c.a * k } : c);
 
-// ---- SVG → small element tree --------------------------------------------------------
+const isNone = (raw) => /^(none|transparent)$/i.test(raw.trim());
 
-const ENTITIES = {
-  amp: "&",
-  lt: "<",
-  gt: ">",
-  quot: '"',
-  apos: "'",
-  nbsp: " ",
+// ---- the supported subset ----------------------------------------------------------------
+
+const NUMBER = String.raw`[+-]?(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?`;
+const NUMBER_RE = new RegExp(`^${NUMBER}$`);
+const isNumber = (v) => NUMBER_RE.test(v.trim());
+const isSize = (v) => isNumber(v) && +v >= 0;
+const isPaint = (v) => isNone(v) || parseColor(v) !== null;
+const any = () => true;
+const oneOf = (...words) => {
+  const set = new Set(words);
+  return (v) => set.has(v.trim());
 };
-const decode = (s) =>
-  s.replace(/&(?:#(\d+)|#x([0-9a-f]+)|([a-z]+));/gi, (all, d, h, n) =>
-    d
-      ? String.fromCodePoint(+d)
-      : h
-        ? String.fromCodePoint(parseInt(h, 16))
-        : (ENTITIES[n] ?? all),
+// the font families the glyph estimate stands for (Arial's metrics and DejaVu Sans, and
+// the system UI faces a chart's family list names ahead of them)
+const FAMILIES = new Set([
+  "system-ui",
+  "-apple-system",
+  "segoe ui",
+  "helvetica",
+  "arial",
+  "liberation sans",
+  "dejavu sans",
+  "sans-serif",
+]);
+const isFamilyList = (v) =>
+  v.split(",").every((f) =>
+    FAMILIES.has(
+      f
+        .trim()
+        .replace(/^(["'])(.*)\1$/, "$2")
+        .toLowerCase(),
+    ),
   );
+const isTranslateList = (v) =>
+  new RegExp(
+    `^\\s*(?:translate\\(\\s*${NUMBER}(?:\\s*,?\\s*${NUMBER})?\\s*\\)\\s*,?\\s*)+$`,
+  ).test(v);
+const isViewBox = (v) => {
+  const n = v.trim().split(/[\s,]+/);
+  return (
+    n.length === 4 &&
+    n.every((t) => NUMBER_RE.test(t)) &&
+    +n[2] > 0 &&
+    +n[3] > 0
+  );
+};
+const SVG_NS = "http://www.w3.org/2000/svg";
+const STROKED = { stroke: isPaint, "stroke-width": isSize };
 
-const parseAttrs = (s) => {
-  const o = {};
-  for (const m of s.matchAll(/([^\s=/"'<>]+)\s*=\s*(?:"([^"]*)"|'([^']*)')/g))
-    o[m[1]] = decode(m[2] ?? m[3]);
-  return o;
+const SUBSET = {
+  // element → its allowed attributes and the value form each takes
+  elements: {
+    svg: {
+      xmlns: (v) => v === SVG_NS,
+      width: isSize,
+      height: isSize,
+      viewBox: isViewBox,
+      role: any,
+      "aria-label": any,
+      "font-family": isFamilyList,
+      style: any, // its declarations are checked against SUBSET.rootStyle
+    },
+    g: { transform: isTranslateList },
+    a: { href: any },
+    rect: {
+      x: isNumber,
+      y: isNumber,
+      width: isSize,
+      height: isSize,
+      rx: isSize,
+      fill: isPaint,
+      ...STROKED,
+    },
+    circle: {
+      cx: isNumber,
+      cy: isNumber,
+      r: isSize,
+      fill: isPaint,
+      ...STROKED,
+    },
+    line: {
+      x1: isNumber,
+      y1: isNumber,
+      x2: isNumber,
+      y2: isNumber,
+      ...STROKED,
+    },
+    polyline: {
+      points: any, // parsed with the geometry
+      fill: isPaint,
+      ...STROKED,
+      "stroke-linejoin": oneOf("miter", "round", "bevel"),
+      "stroke-linecap": oneOf("butt", "round", "square"),
+    },
+    path: { d: any, fill: isPaint, ...STROKED },
+    text: {
+      x: isNumber,
+      y: isNumber,
+      "font-size": isSize,
+      "font-weight": (v) => /^(normal|bold|[1-9]\d{0,2}|1000)$/.test(v.trim()),
+      "text-anchor": oneOf("start", "middle", "end"),
+      fill: isPaint,
+    },
+    style: {},
+    title: {},
+    desc: {},
+  },
+  // where each element may appear
+  parents: {
+    svg: ["#root"],
+    g: ["svg", "g", "a"],
+    a: ["svg", "g", "a"],
+    rect: ["svg", "g", "a"],
+    circle: ["svg", "g", "a"],
+    line: ["svg", "g", "a"],
+    polyline: ["svg", "g", "a"],
+    path: ["svg", "g", "a"],
+    text: ["svg", "g", "a"],
+    style: ["svg"],
+    title: [
+      "svg",
+      "g",
+      "a",
+      "rect",
+      "circle",
+      "line",
+      "polyline",
+      "path",
+      "text",
+    ],
+    desc: [
+      "svg",
+      "g",
+      "a",
+      "rect",
+      "circle",
+      "line",
+      "polyline",
+      "path",
+      "text",
+    ],
+  },
+  // the declarations the root's style attribute may carry
+  rootStyle: { "font-variant-numeric": oneOf("tabular-nums") },
+  // the dark rules: selector tags and attributes, and the properties they set
+  darkTags: new Set(["rect", "circle", "line", "polyline", "path", "text"]),
+  darkAttrs: new Set(["fill", "stroke"]),
+  darkProps: { fill: isPaint, stroke: isPaint },
+  // path data: straight segments only
+  pathCommands: new Set([..."MmLlHhVvZz"]),
+  entities: { amp: "&", lt: "<", gt: ">", quot: '"', apos: "'" },
+};
+// the shapes, and the channels each paints in report order
+const SHAPES = new Map(
+  Object.entries({
+    rect: ["fill", "stroke"],
+    circle: ["fill", "stroke"],
+    polyline: ["stroke", "fill"],
+    path: ["stroke", "fill"],
+    line: ["stroke"],
+  }),
+);
+// shapes whose grid-coloured stroke is a gridline or rule
+const HAIRLINES = new Set(["line", "path", "polyline"]);
+// initial values of the properties read
+const INITIAL = {
+  fill: "black",
+  stroke: "none",
+  "stroke-width": "1",
+  "stroke-linejoin": "miter",
+  "stroke-linecap": "butt",
+  "font-size": "16",
+  "font-weight": "normal",
+  "text-anchor": "start",
+};
+// input past these is reported as too large instead of audited
+const LIMITS = {
+  bytes: 4_000_000,
+  elements: 20_000,
+  depth: 64,
+  numbers: 20_000, // in one points or d list
+  textChars: 2_000,
+  regions: 40_000, // backdrop regions for one text or mark
+  layers: 256, // backdrop colours for one text or mark
+};
+// the default miter limit: how far a mitred join can reach, in half stroke widths
+const MITER_LIMIT = 4;
+
+// ---- glyph metrics --------------------------------------------------------------------------
+
+// per character, in 1/1000 em: the widest advance (regular, bold) as the larger of Arial's
+// widened 10% and DejaVu Sans'; the narrowest (regular, bold) as 90% of the smaller; the
+// highest reach above and the lowest below the baseline; and the farthest the ink runs
+// left of the advance's start and right of its end. From Liberation Sans (Arial's
+// metrics) and DejaVu Sans, regular and bold. ASCII 32-126 in order, then other glyphs
+// charts use.
+
+const GLYPHS_ASCII = `
+  318,349,250,250,0,0,0,1 401,457,250,299,729,0,0,1 460,522,319,426,729,0,0,1
+  838,838,500,500,718,0,0,1 637,696,500,500,760,147,0,1 979,1002,800,800,742,14,0,1
+  780,873,600,649,742,14,0,1 275,307,171,214,729,0,0,1 391,458,299,299,759,208,0,0
+  391,458,299,299,759,208,0,0 500,523,350,350,742,0,0,1 838,838,525,525,627,0,0,1
+  318,380,250,250,189,155,0,1 367,416,299,299,359,0,0,1 318,380,250,250,189,0,0,1
+  337,366,250,250,729,93,0,1 637,696,500,500,742,14,0,1 637,696,500,500,729,0,0,1
+  637,696,500,500,742,0,0,1 637,696,500,500,742,14,0,1 637,696,500,500,729,0,0,1
+  637,696,500,500,729,14,0,1 637,696,500,500,742,14,0,1 637,696,500,500,729,0,0,1
+  637,696,500,500,742,14,0,1 637,696,500,500,742,14,0,1 337,400,250,299,547,0,0,1
+  337,400,250,299,547,155,0,1 838,838,525,525,600,0,0,1 838,838,525,525,520,0,0,1
+  838,838,525,525,600,0,0,1 612,672,477,522,742,0,0,1 1117,1073,900,877,725,174,0,0
+  734,795,600,649,729,0,0,1 734,795,600,649,729,0,0,0 795,795,628,649,742,14,0,1
+  795,831,649,649,729,0,0,0 734,734,568,600,729,0,0,1 672,684,517,549,729,0,0,1
+  856,856,697,700,742,14,0,1 795,837,649,649,729,0,0,1 306,373,250,250,729,0,0,1
+  550,612,265,334,729,200,57,1 734,795,590,649,729,0,0,32 612,672,500,549,729,0,0,1
+  917,996,749,749,729,0,0,1 795,837,649,649,729,0,0,1 856,856,700,700,742,14,0,1
+  734,734,542,600,729,0,0,1 856,856,700,700,742,197,0,1 795,795,625,649,729,0,0,1
+  734,734,571,600,742,14,0,1 672,683,549,549,729,0,3,4 795,813,649,649,729,14,0,1
+  734,774,600,600,729,0,0,1 1039,1104,849,849,729,0,0,1 734,771,600,600,729,0,0,0
+  734,734,549,600,729,0,10,10 686,726,549,549,729,0,0,1 391,458,250,299,760,208,0,1
+  337,366,250,250,729,93,0,1 391,458,250,299,760,208,0,1 838,838,422,525,729,0,0,1
+  612,612,450,450,0,236,16,12 500,500,299,299,800,0,0,0 613,675,500,500,560,14,0,7
+  635,716,500,549,760,14,0,1 550,612,450,500,560,14,0,1 635,716,500,549,760,14,0,1
+  616,679,500,500,560,14,0,0 353,436,250,299,760,0,0,20 635,716,500,549,560,216,0,1
+  634,712,500,549,760,0,0,1 278,343,199,250,760,0,0,1 278,343,199,250,760,216,34,1
+  580,666,450,500,760,0,0,20 278,343,199,250,760,0,0,1 975,1042,749,800,560,0,0,0
+  634,712,500,549,560,0,0,1 612,688,500,549,560,14,0,1 635,716,500,549,560,208,0,1
+  635,716,500,549,560,208,0,1 412,494,299,350,560,0,0,1 550,612,450,500,560,14,0,0
+  393,479,250,299,702,9,0,1 634,712,500,549,560,14,0,1 592,652,450,500,547,0,0,1
+  818,924,649,700,547,0,3,3 592,646,450,500,547,0,0,1 592,652,450,500,547,216,0,1
+  550,583,450,450,547,0,0,1 637,712,300,350,760,208,0,1 337,366,233,251,764,236,0,1
+  637,712,300,350,760,208,0,1 838,838,525,525,416,0,0,1`;
+const GLYPHS_MORE = {
+  "\u00a0": "318,349,250,250,0,0,0,1",
+  "·": "367,380,286,299,442,0,0,1",
+  "×": "838,838,525,525,607,0,0,1",
+  "–": "612,612,450,450,337,0,0,0",
+  "—": "1100,1100,900,900,337,0,0,0",
+  "−": "838,838,525,525,387,0,0,1",
+  "±": "838,838,493,493,627,0,0,1",
+  "≥": "838,838,493,493,634,0,0,1",
+  "≤": "838,838,493,493,634,0,0,1",
+  "…": "1100,1100,900,900,189,0,0,0",
+  "→": "1100,1100,754,754,539,0,0,1",
+  "←": "1100,1100,754,754,539,0,0,1",
+  "°": "500,500,359,359,749,0,0,1",
+  µ: "637,736,518,518,547,209,0,1",
+  "•": "590,640,315,315,547,0,0,1",
+  "‘": "318,380,199,250,729,0,0,1",
+  "’": "318,380,199,250,729,0,0,1",
+  "“": "519,658,299,450,729,0,0,0",
+  "”": "519,658,299,450,729,0,0,0",
 };
 
-// "fill:#fff; font-size:12px" → { fill, "font-size" }
-const parseDecls = (body) => {
-  const o = {};
-  for (const part of body.split(";")) {
-    const i = part.indexOf(":");
-    if (i < 0) continue;
-    const k = part.slice(0, i).trim().toLowerCase();
-    const v = part
-      .slice(i + 1)
-      .replace(/!important\s*$/i, "")
-      .trim();
-    if (k && v) o[k] = v;
+const GLYPHS = new Map();
+GLYPHS_ASCII.trim()
+  .split(/\s+/)
+  .forEach((row, i) =>
+    GLYPHS.set(String.fromCharCode(32 + i), row.split(",").map(Number)),
+  );
+for (const [ch, row] of Object.entries(GLYPHS_MORE))
+  GLYPHS.set(ch, row.split(",").map(Number));
+// a character the tables do not hold: up to 1.1 em wide (possibly zero), reaching an
+// em above and 0.3 em below the baseline, its ink up to 0.1 em past either side
+const UNKNOWN_GLYPH = [1100, 1100, 0, 0, 1000, 300, 100, 100];
+
+// a text's glyph cells, relative to its anchor. A run of advances a_k starts at
+// -share * sum(a), so glyph i spans [(1 - share) * P_i - share * S_i, (1 - share) *
+// P_i+1 - share * S_i+1] (P: the sum of the advances before, S: from i on). Each advance
+// lies between its narrowest and widest, so each cell takes the extreme of each sum: it
+// spans every place its glyph can be drawn, ink overhang included.
+const glyphCells = (s, px, bold, share) => {
+  const rows = [...s].map((ch) => [ch, GLYPHS.get(ch) ?? UNKNOWN_GLYPH]);
+  const wide = (r) => r[bold ? 1 : 0];
+  const narrow = (r) => r[bold ? 3 : 2];
+  // suffix sums of the widest and narrowest advances
+  const sufWide = new Array(rows.length + 1).fill(0);
+  const sufNarrow = new Array(rows.length + 1).fill(0);
+  for (let i = rows.length - 1; i >= 0; i--) {
+    sufWide[i] = sufWide[i + 1] + wide(rows[i][1]);
+    sufNarrow[i] = sufNarrow[i + 1] + narrow(rows[i][1]);
   }
-  return o;
+  const k = px / 1000;
+  const cells = [];
+  let preWide = 0;
+  let preNarrow = 0;
+  rows.forEach(([ch, r], i) => {
+    const x0 = (1 - share) * preNarrow - share * sufWide[i] - r[6];
+    preWide += wide(r);
+    preNarrow += narrow(r);
+    const x1 = (1 - share) * preWide - share * sufNarrow[i + 1] + r[7];
+    if (/\S/u.test(ch)) cells.push([x0 * k, -r[4] * k, x1 * k, r[5] * k]);
+  });
+  return cells;
 };
 
-function parseSvg(src) {
-  const root = { tag: "#root", a: {}, kids: [], parent: null };
-  const styles = [];
-  let cur = root;
-  let last = 0;
-  const addText = (to, from) => {
-    const t = src.slice(from, to);
-    if (t && cur !== root) cur.kids.push({ text: decode(t), parent: cur });
-  };
-  const re =
-    /<!--[\s\S]*?-->|<!\[CDATA\[[\s\S]*?\]\]>|<\?[\s\S]*?\?>|<!DOCTYPE[^>]*>|<(\/?)([A-Za-z][\w:.-]*)((?:[^>"']|"[^"]*"|'[^']*')*?)(\/?)>/g;
-  let m;
-  while ((m = re.exec(src))) {
-    addText(m.index, last);
-    last = re.lastIndex;
-    if (!m[2]) continue;
-    const name = m[2];
-    if (m[1]) {
-      // closing tag: pop to the nearest open element of that name
-      for (let p = cur; p && p !== root; p = p.parent)
-        if (p.tag === name) {
-          cur = p.parent;
-          break;
+// ---- geometry ---------------------------------------------------------------------------------
+
+// boxes are [x0, y0, x1, y1]
+const overlaps = (a, b) =>
+  a[0] < b[2] && b[0] < a[2] && a[1] < b[3] && b[1] < a[3];
+const grow = (b, d) => [b[0] - d, b[1] - d, b[2] + d, b[3] + d];
+const corners = (b) => [
+  [b[0], b[1]],
+  [b[2], b[1]],
+  [b[0], b[3]],
+  [b[2], b[3]],
+];
+const toBox = ([x, y], b) =>
+  Math.hypot(Math.max(b[0] - x, 0, x - b[2]), Math.max(b[1] - y, 0, y - b[3]));
+const union = (boxes) => {
+  const u = [Infinity, Infinity, -Infinity, -Infinity];
+  for (const b of boxes) {
+    if (b[0] < u[0]) u[0] = b[0];
+    if (b[1] < u[1]) u[1] = b[1];
+    if (b[2] > u[2]) u[2] = b[2];
+    if (b[3] > u[3]) u[3] = b[3];
+  }
+  return u;
+};
+
+// is the point inside a (rounded) rect, boundary included?
+const inRect = (g, x, y) => {
+  const [x0, y0, x1, y1] = g.box;
+  if (x < x0 || x > x1 || y < y0 || y > y1) return false;
+  if (!(g.rx > 0)) return true;
+  const ex = Math.max(0, Math.abs(x - (x0 + x1) / 2) - ((x1 - x0) / 2 - g.rx));
+  const ey = Math.max(0, Math.abs(y - (y0 + y1) / 2) - ((y1 - y0) / 2 - g.ry));
+  return (ex / g.rx) ** 2 + (ey / g.ry) ** 2 <= 1;
+};
+// a rect is convex: it holds a box when it holds the box's corners
+const rectHolds = (g, b) => corners(b).every(([x, y]) => inRect(g, x, y));
+// does a disc paint inside the box? (here and below: over a positive area; a shape that
+// only touches the box does not meet it)
+const discMeets = (c, r, b) => toBox(c, b) < r;
+// does the fill of a (rounded) rect meet the box? its cross of straight edges, or a corner
+const rectMeets = (g, b) => {
+  if (!overlaps(g.box, b)) return false;
+  if (!(g.rx > 0)) return true;
+  const [x0, y0, x1, y1] = g.box;
+  const { rx, ry } = g;
+  if (overlaps([x0 + rx, y0, x1 - rx, y1], b)) return true;
+  if (overlaps([x0, y0 + ry, x1, y1 - ry], b)) return true;
+  // a corner quarter-ellipse: the box's point nearest its centre is inside it
+  return [
+    [x0 + rx, y0 + ry],
+    [x1 - rx, y0 + ry],
+    [x0 + rx, y1 - ry],
+    [x1 - rx, y1 - ry],
+  ].some(
+    ([cx, cy]) =>
+      ((Math.min(Math.max(cx, b[0]), b[2]) - cx) / rx) ** 2 +
+        ((Math.min(Math.max(cy, b[1]), b[3]) - cy) / ry) ** 2 <
+      1,
+  );
+};
+// does a straight-edged fill (every subpath closed) paint inside the box? Each subpath
+// clipped to the box (Sutherland-Hodgman) keeps some area; a hole counts as paint
+const polyMeets = (g, b) =>
+  g.subpaths.some(({ pts }) => {
+    let poly = pts;
+    for (const [axis, bound, keep] of [
+      [0, b[0], 1],
+      [0, b[2], -1],
+      [1, b[1], 1],
+      [1, b[3], -1],
+    ]) {
+      const next = [];
+      for (let i = 0; i < poly.length; i++) {
+        const p = poly[i];
+        const q = poly[(i + 1) % poly.length];
+        const pin = (p[axis] - bound) * keep >= 0;
+        const qin = (q[axis] - bound) * keep >= 0;
+        if (pin) next.push(p);
+        if (pin !== qin) {
+          const t = (bound - p[axis]) / (q[axis] - p[axis]);
+          next.push([p[0] + t * (q[0] - p[0]), p[1] + t * (q[1] - p[1])]);
         }
-      continue;
+      }
+      poly = next;
+      if (poly.length < 3) return false;
     }
-    const el = { tag: name, a: parseAttrs(m[3]), kids: [], parent: cur };
-    if (el.a.style) el.style = parseDecls(el.a.style);
-    cur.kids.push(el);
-    if (m[4]) continue;
-    if (name === "style") {
-      // raw text up to </style>: CSS may hold `>` and quotes the tag pattern would misread
-      const tail = /<\/style\s*>/i.exec(src.slice(last));
-      const stop = tail ? last + tail.index : src.length;
-      styles.push(src.slice(last, stop).replace(/<!\[CDATA\[|\]\]>/g, ""));
-      last = re.lastIndex = tail ? stop + tail[0].length : src.length;
-      continue;
+    let area = 0;
+    for (let i = 0; i < poly.length; i++) {
+      const [x0, y0] = poly[i];
+      const [x1, y1] = poly[(i + 1) % poly.length];
+      area += x0 * y1 - x1 * y0;
     }
-    cur = el;
-  }
-  addText(src.length, last);
-  return { root, styles };
-}
-
-// the element and its ancestors, up to (not including) the root
-function* chain(el) {
-  for (let p = el; p && p.tag !== "#root"; p = p.parent) yield p;
-}
-
-// ---- the stylesheet --------------------------------------------------------------------
-
-// split on `sep` outside (), [] and quotes
-const splitTop = (s, sep) => {
-  const out = [];
-  let depth = 0;
-  let quote = null;
-  let from = 0;
-  for (let i = 0; i < s.length; i++) {
-    const c = s[i];
-    if (quote) {
-      if (c === quote) quote = null;
-    } else if (c === '"' || c === "'") quote = c;
-    else if (c === "(" || c === "[") depth++;
-    else if (c === ")" || c === "]") depth--;
-    else if (c === sep && depth === 0) {
-      out.push(s.slice(from, i));
-      from = i + 1;
-    }
-  }
-  out.push(s.slice(from));
-  return out;
-};
-
-// one attribute condition: [name], [name=v], [name="v"], [name='v'] → name, value
-const COND = String.raw`\[\s*([\w:-]+)\s*(?:=\s*(?:"([^"]*)"|'([^']*)'|([^\]\s]+))\s*)?\]`;
-const SELECTOR = new RegExp(String.raw`^(\*|[a-zA-Z][\w-]*)?((?:${COND})+)$`);
-const CONDS = new RegExp(COND, "g");
-
-// `tag[attr="v"]`, `[attr='v']`, `rect[fill=#fff][stroke]` → { tag, conds } or null
-const parseSelector = (sel) => {
-  const m = SELECTOR.exec(sel.trim());
-  if (!m) return null;
-  const conds = [...m[2].matchAll(CONDS)].map((c) => [
-    c[1],
-    c[2] ?? c[3] ?? c[4] ?? null,
+    return Math.abs(area) > 1e-9;
+  });
+// does the band of half width d around segment a-b, extended by e0 before a and e1
+// after b (a butt or square cap), meet the box? (separating axes; touching is apart)
+const bandMeets = (a, b, d, e0, e1, box) => {
+  const L = Math.hypot(b[0] - a[0], b[1] - a[1]);
+  if (!L) return false;
+  const ux = (b[0] - a[0]) / L;
+  const uy = (b[1] - a[1]) / L;
+  const ends = [
+    [a[0] - ux * e0, a[1] - uy * e0],
+    [b[0] + ux * e1, b[1] + uy * e1],
+  ];
+  const band = ends.flatMap(([x, y]) => [
+    [x - uy * d, y + ux * d],
+    [x + uy * d, y - ux * d],
   ]);
-  return { tag: m[1] && m[1] !== "*" ? m[1] : null, conds };
-};
-
-// balanced {…} starting at the `{` at index i → index of its `}`
-const closeBrace = (s, i) => {
-  let depth = 0;
-  for (let j = i; j < s.length; j++) {
-    if (s[j] === "{") depth++;
-    else if (s[j] === "}" && --depth === 0) return j;
-  }
-  return s.length;
-};
-
-// → { dark: [{ tag, conds, props }], problems: [string] }
-function parseStylesheets(styles) {
-  const dark = [];
-  const problems = [];
-  const rules = (css, where) => {
-    let i = 0;
-    while (i < css.length) {
-      while (i < css.length && /\s/.test(css[i])) i++;
-      if (i >= css.length) break;
-      const brace = css.indexOf("{", i);
-      if (brace < 0) {
-        problems.push(`unsupported "${css.slice(i).trim()}": not applied`);
-        break;
-      }
-      const end = closeBrace(css, brace);
-      const prelude = css.slice(i, brace).trim().replace(/\s+/g, " ");
-      const body = css.slice(brace + 1, end);
-      i = end + 1;
-      if (prelude.startsWith("@")) {
-        const media = /^@media (.*)$/i.exec(prelude);
-        if (
-          media &&
-          where === "top" &&
-          /^\( ?prefers-color-scheme ?: ?dark ?\)$/i.test(media[1])
-        )
-          rules(body, "dark");
-        else
-          problems.push(`unsupported "${prelude}": its rules are not applied`);
-        continue;
-      }
-      const props = parseDecls(body);
-      for (const sel of splitTop(prelude, ",")) {
-        const s = parseSelector(sel);
-        if (where === "dark" && s) dark.push({ ...s, props });
-        else
-          problems.push(
-            `unsupported selector "${sel.trim()}"${where === "dark" ? " in the dark rules" : " outside the dark @media block"}: its declarations are not applied`,
-          );
-      }
+  const B = corners(box);
+  for (const [ax, ay] of [
+    [1, 0],
+    [0, 1],
+    [ux, uy],
+    [-uy, ux],
+  ]) {
+    let pl = Infinity;
+    let ph = -Infinity;
+    let bl = Infinity;
+    let bh = -Infinity;
+    for (const [x, y] of band) {
+      const v = x * ax + y * ay;
+      pl = Math.min(pl, v);
+      ph = Math.max(ph, v);
     }
-  };
-  for (const css of styles) rules(css.replace(/\/\*[\s\S]*?\*\//g, ""), "top");
-  return { dark, problems };
-}
-
-const ruleMatches = (r, el) =>
-  (!r.tag || r.tag === el.tag) &&
-  r.conds.every(([k, v]) => (v === null ? k in el.a : el.a[k] === v));
-
-// ---- computed properties ---------------------------------------------------------------
-
-// the value declared on this element for a theme: style attr > dark rule > attribute
-function declared(el, prop, theme, ctx) {
-  if (el.style && prop in el.style) return el.style[prop];
-  if (theme === "dark") {
-    // the most specific matching rule; a later rule wins a tie
-    let v;
-    let best = [-1, -1];
-    for (const r of ctx.dark) {
-      if (!(prop in r.props) || !ruleMatches(r, el)) continue;
-      const spec = [r.conds.length, r.tag ? 1 : 0];
-      if (spec[0] > best[0] || (spec[0] === best[0] && spec[1] >= best[1])) {
-        best = spec;
-        v = r.props[prop];
-      }
+    for (const [x, y] of B) {
+      const v = x * ax + y * ay;
+      bl = Math.min(bl, v);
+      bh = Math.max(bh, v);
     }
-    if (v !== undefined) return v;
+    if (ph <= bl || bh <= pl) return false;
   }
-  return el.a[prop];
-}
-
-// the value in effect: this element's, else (for inherited properties) the nearest
-// ancestor's, else the property's initial value. Never undefined.
-function computed(el, prop, theme, ctx) {
-  const { inherit, initial } = PROPS[prop];
-  for (const p of chain(el)) {
-    const v = declared(p, prop, theme, ctx);
-    if (v !== undefined && v !== "inherit") return v;
-    if (!inherit) break;
-  }
-  return initial;
-}
-
-const NUMBER = String.raw`[+-]?(?:\d+\.?\d*|\.\d+)(?:e[+-]?\d+)?`;
-const NUMBER_RE = new RegExp(`^${NUMBER}$`, "i");
-const numberOr = (v, dflt) =>
-  Number.isFinite(parseFloat(v)) ? parseFloat(v) : dflt;
-
-// font-size in px: px or a unitless number; NaN for any other form
-const fontPx = (raw) => {
-  const m = /^(\d+\.?\d*|\.\d+)(?:px)?$/i.exec(raw.trim());
-  return m ? +m[1] : NaN;
-};
-
-// a length in user units: a number or px, or a % of `total` when it is known; else NaN
-const lengthOf = (v, total) => {
-  if (v === undefined) return 0;
-  const m = new RegExp(`^\\s*(${NUMBER})(px|%)?\\s*$`, "i").exec(v);
-  if (!m) return NaN;
-  if (m[2] === "%") return total == null ? NaN : (+m[1] * total) / 100;
-  return +m[1];
-};
-
-// a transform attribute of translate() functions → { xy }, else { bad: the first other part }
-const parseTransform = (t) => {
-  const re = /\s*,?\s*([A-Za-z]+)\s*\(([^)]*)\)/y;
-  let x = 0;
-  let y = 0;
-  let m;
-  let at = 0;
-  while ((m = re.exec(t))) {
-    at = re.lastIndex;
-    const args = m[2]
-      .trim()
-      .split(/[\s,]+/)
-      .filter(Boolean);
-    if (
-      m[1] !== "translate" ||
-      args.length < 1 ||
-      args.length > 2 ||
-      !args.every((a) => NUMBER_RE.test(a))
-    )
-      return { bad: m[0].trim().replace(/^,\s*/, "") };
-    x += +args[0];
-    y += +(args[1] ?? 0);
-  }
-  return t.slice(at).trim() ? { bad: `"${t}"` } : { xy: [x, y] };
+  return true;
 };
 
 // path data of straight segments → { subpaths: [{ pts, closed }] }, else { bad }
 const parsePath = (d) => {
-  const toks = d.match(new RegExp(`[A-Za-z]|${NUMBER}`, "gi")) ?? [];
-  if (d.replace(new RegExp(`[A-Za-z]|${NUMBER}|[\\s,]`, "gi"), ""))
-    return { bad: `"${d}"` };
+  const toks = d.match(new RegExp(`${NUMBER}|[A-Za-z]`, "g")) ?? [];
+  if (toks.length > LIMITS.numbers) return { tooLarge: toks.length };
+  if (d.replace(new RegExp(`${NUMBER}|[A-Za-z]|[\\s,]`, "g"), ""))
+    return { bad: `d="${d}"` };
   const subpaths = [];
   let cur = null;
   let x = 0;
   let y = 0;
   let cmd = null;
   for (let i = 0; i < toks.length;) {
-    if (/[A-Za-z]/.test(toks[i])) {
+    if (/^[A-Za-z]$/.test(toks[i])) {
       cmd = toks[i++];
-      if (!SUBSET.pathCommands.has(cmd)) return { bad: `command ${cmd}` };
+      if (!SUBSET.pathCommands.has(cmd)) return { bad: `path command ${cmd}` };
       if (/z/i.test(cmd)) {
         if (cur) {
           cur.closed = true;
@@ -568,11 +658,15 @@ const parsePath = (d) => {
         }
         continue;
       }
-    } else if (!cmd || /z/i.test(cmd)) return { bad: `"${d}"` };
+    } else if (!cmd || /z/i.test(cmd)) return { bad: `d="${d}"` };
     const rel = cmd === cmd.toLowerCase();
     const n = /[hv]/i.test(cmd) ? 1 : 2;
+    if (
+      toks.length - i < n ||
+      toks.slice(i, i + n).some((t) => !NUMBER_RE.test(t))
+    )
+      return { bad: `d="${d}"` };
     const args = toks.slice(i, i + n).map(Number);
-    if (args.length < n || args.some(Number.isNaN)) return { bad: `"${d}"` };
     i += n;
     const from = [x, y];
     const up = cmd.toUpperCase();
@@ -595,240 +689,222 @@ const parsePath = (d) => {
   }
   return { subpaths };
 };
-
-// advance widths of ASCII 32-126 in Arial and Arial Bold, in 1/1000 em
-const widths = (t) => t.trim().split(/\s+/).map(Number);
-const ADVANCE = widths(`
-  278 278 355 556 556 889 667 191 333 333 389 584 278 333 278 278 556 556 556 556 556
-  556 556 556 556 556 278 278 584 584 584 556 1015 667 667 722 722 667 611 778 722 278
-  500 667 556 833 722 778 667 778 722 667 611 722 667 944 667 667 611 278 278 278 469
-  556 333 556 556 500 556 556 278 556 556 222 222 500 222 833 556 556 556 556 333 500
-  278 556 500 722 500 500 500 334 260 334 584`);
-const ADVANCE_BOLD = widths(`
-  278 333 474 556 556 889 722 238 333 333 389 584 278 333 278 278 556 556 556 556 556
-  556 556 556 556 556 333 333 584 584 584 611 975 722 722 722 722 667 611 778 722 278
-  556 722 611 833 722 778 667 778 722 667 611 722 667 944 667 667 611 333 278 333 584
-  556 333 556 611 556 611 556 333 611 611 278 278 556 278 889 611 611 611 611 389 556
-  333 611 556 778 556 556 500 389 280 389 584`);
-// the same for punctuation and symbols charts use outside ASCII: regular[, bold]
-const ADVANCE_MORE = {
-  "\u00a0": [278],
-  "·": [333],
-  "×": [584],
-  "–": [556],
-  "—": [1000],
-  "−": [584],
-  "±": [549],
-  "≥": [549],
-  "≤": [549],
-  "…": [1000],
-  "→": [1000],
-  "←": [1000],
-  "°": [400],
-  µ: [576],
-  "•": [350],
-  "‘": [222, 278],
-  "’": [222, 278],
-  "“": [333, 500],
-  "”": [333, 500],
-};
-// how far ASCII glyphs reach below the baseline in Arial, as a share of the font size;
-// the rest reach 0.03 below it (round overshoot)
-const DESCENDERS = {
-  g: 0.21,
-  j: 0.21,
-  p: 0.21,
-  q: 0.21,
-  y: 0.21,
-  Q: 0.06,
-  $: 0.08,
-  ",": 0.15,
-  ";": 0.15,
-  _: 0.15,
-  "(": 0.21,
-  ")": 0.21,
-  "[": 0.21,
-  "]": 0.21,
-  "{": 0.21,
-  "}": 0.21,
-  "|": 0.21,
-  "@": 0.21,
-};
-// a text's glyph cells, relative to its start: per character its advance (Arial's or
-// Arial Bold's from the tables above; 0.6 em for other characters, 1 em for East Asian
-// wide ones), widened 10% for the system-ui fonts charts name ahead of Arial, and its
-// reach above and below the baseline (0.75 em above for the tabled glyphs; others 0.95
-// above and 0.25 below, for accents and shapes the tables do not know). A combining mark
-// widens the reach of its base glyph.
-const glyphCells = (s, px, weight) => {
-  const bold = /^(bold|bolder)$/i.test(weight) || +weight >= 600;
-  const k = px * 1.1;
-  const cells = [];
-  let x = 0;
-  for (const ch of s) {
-    const c = ch.codePointAt(0);
-    const ascii = c >= 32 && c <= 126;
-    const more = ADVANCE_MORE[ch];
-    const known = ascii || more !== undefined;
-    const up = (known ? 0.75 : 0.95) * px;
-    const down = (known ? (DESCENDERS[ch] ?? 0.03) : 0.25) * px;
-    if (/\p{M}/u.test(ch)) {
-      const base = cells[cells.length - 1];
-      if (base) {
-        base.up = Math.max(base.up, up);
-        base.down = Math.max(base.down, down);
-      }
-      continue;
-    }
-    const adv = ascii
-      ? (bold ? ADVANCE_BOLD : ADVANCE)[c - 32] / 1000
-      : more
-        ? more[bold ? more.length - 1 : 0] / 1000
-        : c >= 0x2e80 && c <= 0xffdc
-          ? 1
-          : 0.6;
-    cells.push({ x0: x * k, x1: (x + adv) * k, up, down, ink: /\S/u.test(ch) });
-    x += adv;
-  }
-  return { width: x * k, cells };
-};
-
-// boxes are [x0, y0, x1, y1]
-const overlaps = (a, b) =>
-  a[0] < b[2] && b[0] < a[2] && a[1] < b[3] && b[1] < a[3];
-const grow = (b, d) => [b[0] - d, b[1] - d, b[2] + d, b[3] + d];
-const corners = (b) => [
-  [b[0], b[1]],
-  [b[2], b[1]],
-  [b[0], b[3]],
-  [b[2], b[3]],
-];
-
-// does the fill of a shape's geometry contain the point (a closed boundary counts)?
-const inside = (g, px, py, rule) => {
-  const [x0, y0, x1, y1] = g.box;
-  if (px < x0 || px > x1 || py < y0 || py > y1) return false;
-  if (g.kind === "rect") {
-    if (!(g.rx > 0 && g.ry > 0)) return true;
-    const ex = Math.max(
-      0,
-      Math.abs(px - (x0 + x1) / 2) - ((x1 - x0) / 2 - g.rx),
-    );
-    const ey = Math.max(
-      0,
-      Math.abs(py - (y0 + y1) / 2) - ((y1 - y0) / 2 - g.ry),
-    );
-    return (ex / g.rx) ** 2 + (ey / g.ry) ** 2 <= 1;
-  }
-  if (g.kind === "ellipse")
-    return ((px - g.cx) / g.rx) ** 2 + ((py - g.cy) / g.ry) ** 2 <= 1;
-  // straight-edged: every subpath closed for filling, winding and crossings counted
-  let winding = 0;
-  let crossings = 0;
-  for (const { pts } of g.subpaths)
-    for (let i = 0; i < pts.length; i++) {
-      const [ax, ay] = pts[i];
-      const [bx, by] = pts[(i + 1) % pts.length];
-      if (ay <= py === by <= py) continue;
-      if (ax + ((py - ay) / (by - ay)) * (bx - ax) > px) {
-        crossings++;
-        winding += by > ay ? 1 : -1;
-      }
-    }
-  return rule === "evenodd" ? crossings % 2 === 1 : winding !== 0;
-};
-// a convex shape (rect, ellipse) contains a box when it contains its four corners
-const containsBox = (g, b) => corners(b).every(([x, y]) => inside(g, x, y));
-// the same rect or ellipse shrunk by d on every side (its stroke's inner edge)
-const shrink = (g, d) => {
-  const box = [g.box[0] + d, g.box[1] + d, g.box[2] - d, g.box[3] - d];
-  if (box[0] > box[2] || box[1] > box[3]) return null;
-  return g.kind === "rect"
-    ? { ...g, box, rx: Math.max(0, g.rx - d), ry: Math.max(0, g.ry - d) }
-    : { ...g, box, rx: g.rx - d, ry: g.ry - d };
-};
-
-// does the segment a-b meet the box? (Liang-Barsky clipping)
-const segmentMeets = ([ax, ay], [bx, by], [x0, y0, x1, y1]) => {
-  let t0 = 0;
-  let t1 = 1;
-  const dx = bx - ax;
-  const dy = by - ay;
-  for (const [p, q] of [
-    [-dx, ax - x0],
-    [dx, x1 - ax],
-    [-dy, ay - y0],
-    [dy, y1 - ay],
-  ]) {
-    if (p === 0) {
-      if (q < 0) return false;
-      continue;
-    }
-    const r = q / p;
-    if (p < 0) {
-      if (r > t1) return false;
-      t0 = Math.max(t0, r);
-    } else {
-      if (r < t0) return false;
-      t1 = Math.min(t1, r);
-    }
-  }
-  return true;
-};
-// the distance between the segment a-b and the box (0 when they meet)
-const segmentToBox = (a, b, box) => {
-  if (segmentMeets(a, b, box)) return 0;
-  const toPoint = ([px, py]) => {
-    const dx = b[0] - a[0];
-    const dy = b[1] - a[1];
-    const len2 = dx * dx + dy * dy;
-    const t = len2
-      ? Math.max(0, Math.min(1, ((px - a[0]) * dx + (py - a[1]) * dy) / len2))
-      : 0;
-    return Math.hypot(a[0] + t * dx - px, a[1] + t * dy - py);
-  };
-  const toBox = ([px, py]) =>
-    Math.hypot(
-      Math.max(box[0] - px, 0, px - box[2]),
-      Math.max(box[1] - py, 0, py - box[3]),
-    );
-  return Math.min(toBox(a), toBox(b), ...corners(box).map(toPoint));
-};
-const pointIn = ([x, y], b) => x >= b[0] && x <= b[2] && y >= b[1] && y <= b[3];
-// does the fill of an ellipse meet the box? (the box's point nearest its centre is inside)
-const ellipseMeets = (cx, cy, rx, ry, [x0, y0, x1, y1]) =>
-  ((Math.min(Math.max(cx, x0), x1) - cx) / rx) ** 2 +
-    ((Math.min(Math.max(cy, y0), y1) - cy) / ry) ** 2 <=
-  1;
-// does the fill of a (rounded) rect meet the box? its cross of straight edges, or a
-// corner ellipse
-const rectMeets = (g, b) => {
-  if (!overlaps(g.box, b)) return false;
-  if (!(g.rx > 0 && g.ry > 0)) return true;
-  const [x0, y0, x1, y1] = g.box;
-  const { rx, ry } = g;
+// does a subpath enclose any area? three distinct vertices not on one line
+const hasArea = (pts) => {
+  const [a] = pts;
+  const b = pts.find((p) => p[0] !== a[0] || p[1] !== a[1]);
   return (
-    overlaps([x0 + rx, y0, x1 - rx, y1], b) ||
-    overlaps([x0, y0 + ry, x1, y1 - ry], b) ||
-    [
-      [x0 + rx, y0 + ry],
-      [x1 - rx, y0 + ry],
-      [x0 + rx, y1 - ry],
-      [x1 - rx, y1 - ry],
-    ].some(([cx, cy]) => ellipseMeets(cx, cy, rx, ry, b))
+    b !== undefined &&
+    pts.some(
+      (p) =>
+        Math.abs(
+          (b[0] - a[0]) * (p[1] - a[1]) - (b[1] - a[1]) * (p[0] - a[0]),
+        ) > 1e-9,
+    )
   );
 };
-// does the fill of a straight-edged shape meet the box? a vertex is in it, an edge
-// crosses it, or it lies inside the fill
-const polyMeets = (g, b, rule) =>
-  g.subpaths.some(({ pts }) =>
-    pts.some(
-      (p, i) => pointIn(p, b) || segmentMeets(p, pts[(i + 1) % pts.length], b),
-    ),
-  ) || corners(b).some(([x, y]) => inside(g, x, y, rule));
 
-const article = (tag) => (/^[aeiou]/.test(tag) ? `an ${tag}` : `a ${tag}`);
-const isNone = (raw) => /^(none|transparent)$/i.test(raw.trim());
+// ---- SVG → small element tree ------------------------------------------------------------
+
+// the tree, the <style> sheets, and the reasons it cannot be audited; parsing stops at
+// the first limit it passes
+function parseSvg(src, issue) {
+  const root = { tag: "#root", a: {}, kids: [], parent: null, depth: 0 };
+  const styles = [];
+  const decode = (s) =>
+    s.replace(/&(#[0-9]+;|#x[0-9a-fA-F]+;|[A-Za-z][\w.-]*;)?/g, (all, body) => {
+      if (!body) {
+        issue("invalid entity: a bare &");
+        return all;
+      }
+      if (body[0] === "#") {
+        const cp =
+          body[1] === "x"
+            ? parseInt(body.slice(2, -1), 16)
+            : parseInt(body.slice(1, -1), 10);
+        const xmlChar =
+          cp === 9 ||
+          cp === 10 ||
+          cp === 13 ||
+          (cp >= 0x20 && cp <= 0x10ffff && !(cp >= 0xd800 && cp <= 0xdfff));
+        if (!xmlChar) {
+          issue(`invalid entity ${all}`);
+          return "";
+        }
+        return String.fromCodePoint(cp);
+      }
+      const name = body.slice(0, -1);
+      if (Object.hasOwn(SUBSET.entities, name)) return SUBSET.entities[name];
+      issue(`unsupported entity ${all}`);
+      return all;
+    });
+  let cur = root;
+  let last = 0;
+  let count = 0;
+  const addText = (to) => {
+    const t = src.slice(last, to);
+    if (/</.test(t)) issue('malformed XML: a "<" that opens no tag');
+    if (t && cur !== root) cur.kids.push({ text: decode(t), parent: cur });
+  };
+  const re =
+    /<!--[\s\S]*?-->|<!\[CDATA\[[\s\S]*?\]\]>|<\?[\s\S]*?\?>|<!DOCTYPE[^>]*>|<(\/?)([A-Za-z][\w:.-]*)((?:[^>"']|"[^"]*"|'[^']*')*?)(\/?)>/g;
+  let m;
+  while ((m = re.exec(src))) {
+    addText(m.index);
+    last = re.lastIndex;
+    if (!m[2]) {
+      if (m[0].startsWith("<![CDATA[")) issue("unsupported CDATA section");
+      else if (m[0].startsWith("<!DOCTYPE")) issue("unsupported DOCTYPE");
+      else if (
+        m[0].startsWith("<?") &&
+        !(/^<\?xml\s/.test(m[0]) && !src.slice(0, m.index).trim())
+      )
+        issue(`unsupported processing instruction ${m[0].slice(0, 20)}`);
+      continue;
+    }
+    const name = m[2];
+    if (m[1]) {
+      if (cur.tag !== name) {
+        issue(`malformed XML: </${name}> does not close <${cur.tag}>`);
+        return { root, styles, stop: true };
+      }
+      cur = cur.parent;
+      continue;
+    }
+    if (++count > LIMITS.elements) {
+      issue(`too large: more than ${LIMITS.elements} elements`);
+      return { root, styles, stop: true };
+    }
+    const a = {};
+    const rest = m[3].replace(
+      /([^\s=/"'<>]+)\s*=\s*(?:"([^"]*)"|'([^']*)')/g,
+      (all, k, v1, v2) => {
+        if (Object.hasOwn(a, k))
+          issue(`malformed XML: ${k} twice on <${name}>`);
+        a[k] = decode(v1 ?? v2);
+        return "";
+      },
+    );
+    if (rest.trim()) issue(`malformed XML: attributes of <${name}>`);
+    const el = { tag: name, a, kids: [], parent: cur, depth: cur.depth + 1 };
+    if (el.depth > LIMITS.depth) {
+      issue(`too large: nesting deeper than ${LIMITS.depth}`);
+      return { root, styles, stop: true };
+    }
+    cur.kids.push(el);
+    if (m[4]) continue;
+    if (name === "style") {
+      // raw text up to </style>: CSS may hold `>` and quotes the tag pattern would misread
+      const tail = /<\/style\s*>/.exec(src.slice(last));
+      if (!tail) {
+        issue("malformed XML: <style> is not closed");
+        return { root, styles, stop: true };
+      }
+      const css = src.slice(last, last + tail.index);
+      if (css.includes("<![CDATA[")) issue("unsupported CDATA section");
+      styles.push(css);
+      last = re.lastIndex = last + tail.index + tail[0].length;
+      continue;
+    }
+    cur = el;
+  }
+  addText(src.length);
+  if (cur !== root) issue(`malformed XML: <${cur.tag}> is not closed`);
+  return { root, styles, stop: cur !== root };
+}
+
+// ---- the stylesheet -----------------------------------------------------------------------
+
+// balanced {…} starting at the `{` at index i → index of its `}`, or -1
+const closeBrace = (s, i) => {
+  let depth = 0;
+  for (let j = i; j < s.length; j++) {
+    if (s[j] === "{") depth++;
+    else if (s[j] === "}" && --depth === 0) return j;
+  }
+  return -1;
+};
+// CSS declarations "k: v; k: v" → [[k, v, text]], or a reason they cannot be read
+const declarations = (body) => {
+  if (body.includes("/*")) return { bad: "CSS comment" };
+  if (/!\s*important/i.test(body)) return { bad: "CSS !important" };
+  const out = [];
+  for (const part of body.split(";")) {
+    if (!part.trim()) continue;
+    const i = part.indexOf(":");
+    if (i < 0) return { bad: `CSS declaration "${part.trim()}"` };
+    out.push([
+      part.slice(0, i).trim().toLowerCase(),
+      part.slice(i + 1).trim(),
+      part.trim(),
+    ]);
+  }
+  return { decls: out };
+};
+const SELECTOR = /^([a-z]+)\[\s*([a-z-]+)\s*=\s*(?:"([^"]*)"|'([^']*)')\s*\]$/;
+const DARK_MEDIA = /^@media\s*\(\s*prefers-color-scheme\s*:\s*dark\s*\)\s*\{/;
+
+// the dark rules of one <style>: [{ tag, attr, value, props }]; what is not in the subset
+// is reported and not applied
+function parseDarkSheet(css, unsupported) {
+  const rules = [];
+  if (css.includes("/*")) {
+    unsupported("CSS comment in <style>");
+    return rules;
+  }
+  if (/!\s*important/i.test(css)) {
+    unsupported("CSS !important");
+    return rules;
+  }
+  const snippet = (s) => s.trim().replace(/\s+/g, " ").slice(0, 60);
+  let i = 0;
+  while (i < css.length) {
+    while (i < css.length && /\s/.test(css[i])) i++;
+    if (i >= css.length) break;
+    const head = DARK_MEDIA.exec(css.slice(i));
+    const end = head ? closeBrace(css, i + head[0].length - 1) : -1;
+    if (!head || end < 0) {
+      const brace = css.indexOf("{", i);
+      const prelude = snippet(css.slice(i, brace < 0 ? css.length : brace));
+      unsupported(
+        `CSS "${prelude}": only @media (prefers-color-scheme: dark) blocks are read`,
+      );
+      return rules;
+    }
+    const body = css.slice(i + head[0].length, end);
+    i = end + 1;
+    let j = 0;
+    while (j < body.length) {
+      while (j < body.length && /\s/.test(body[j])) j++;
+      if (j >= body.length) break;
+      const open = body.indexOf("{", j);
+      const close = open < 0 ? -1 : body.indexOf("}", open);
+      if (close < 0 || body.slice(open + 1, close).includes("{")) {
+        unsupported(`CSS "${snippet(body.slice(j))}" in the dark rules`);
+        return rules;
+      }
+      const sels = body.slice(j, open).split(",");
+      const d = declarations(body.slice(open + 1, close));
+      j = close + 1;
+      if (d.bad) {
+        unsupported(`${d.bad} in the dark rules`);
+        continue;
+      }
+      const props = {};
+      for (const [k, v, text] of d.decls) {
+        if (SUBSET.darkProps[k]?.(v)) props[k] = v;
+        else unsupported(`CSS declaration "${text}" in the dark rules`);
+      }
+      for (const sel of sels) {
+        const s = SELECTOR.exec(sel.trim());
+        if (s && SUBSET.darkTags.has(s[1]) && SUBSET.darkAttrs.has(s[2]))
+          rules.push({ tag: s[1], attr: s[2], value: s[3] ?? s[4], props });
+        else unsupported(`selector "${sel.trim()}"`);
+      }
+    }
+  }
+  return rules;
+}
 
 // ---- the audit ---------------------------------------------------------------------------
 
@@ -853,376 +929,406 @@ export function auditSvg(
   const out = [];
   const notes = new Set();
   const done = () => Object.assign(out, { notes: [...notes] });
-  // an issue about the SVG's structure, reported once however often it is met
+  // an issue about the input itself, reported once however often it is met
   const seen = new Set();
-  const unsupported = (what) => {
-    const msg = `unsupported ${what}: the audit cannot verify it`;
+  const once = (msg) => {
     if (!seen.has(msg)) out.push(msg);
     seen.add(msg);
   };
+  const issue = (what) => once(`${what}: the audit cannot verify it`);
+  const unsupported = (what) => issue(`unsupported ${what}`);
 
-  const { root, styles } = parseSvg(svg);
-  const svgEl = root.kids.find((k) => k.tag === "svg");
+  if (typeof svg !== "string") {
+    issue("not an SVG: the input is not a string");
+    return done();
+  }
+  if (svg.length > LIMITS.bytes) {
+    issue(`too large: more than ${LIMITS.bytes} characters`);
+    return done();
+  }
+  const { root, styles, stop } = parseSvg(svg, issue);
+  if (stop) return done();
+  const tops = root.kids.filter((k) => k.tag);
+  const svgEl = tops[0]?.tag === "svg" ? tops[0] : null;
   if (!svgEl) {
     out.push("not an SVG: no <svg> root element");
     return done();
   }
-  const sheet = parseStylesheets(styles);
-  const ctx = { dark: sheet.dark };
-  for (const p of sheet.problems) out.push(p);
-  for (const r of sheet.dark)
-    for (const k of Object.keys(r.props))
-      if (SUBSET.props.has(k) || k === "transform")
-        unsupported(`${k} in the dark rules`);
+  if (tops.length > 1) unsupported(`<${tops[1].tag}> after the root <svg>`);
 
-  // canvas size: width/height attributes (px) or the viewBox
-  const vb = (svgEl.a.viewBox || "")
+  // ---- the drawn tree in paint order; every element, attribute and value in the subset
+  const drawn = [];
+  const stack = [svgEl];
+  while (stack.length) {
+    const el = stack.pop();
+    const allowed = SUBSET.elements[el.tag];
+    if (!allowed) {
+      unsupported(`<${el.tag}>`);
+      continue;
+    }
+    if (!SUBSET.parents[el.tag].includes(el.parent.tag)) {
+      unsupported(`<${el.tag}> inside <${el.parent.tag}>`);
+      continue;
+    }
+    for (const [k, v] of Object.entries(el.a)) {
+      if (!Object.hasOwn(allowed, k))
+        unsupported(`attribute ${k} on <${el.tag}>`);
+      else if (!allowed[k](v)) unsupported(`${k}="${v}" on <${el.tag}>`);
+    }
+    // accumulated translate()
+    el.dx = el.parent.dx ?? 0;
+    el.dy = el.parent.dy ?? 0;
+    if (el.tag === "g" && el.a.transform && isTranslateList(el.a.transform))
+      for (const t of el.a.transform.matchAll(/\(([^)]*)\)/g)) {
+        const [x, y = "0"] = t[1].trim().split(/[\s,]+/);
+        el.dx += +x;
+        el.dy += +y;
+      }
+    if (SHAPES.has(el.tag) || el.tag === "text") {
+      el.ord = drawn.length;
+      drawn.push(el);
+    }
+    if (el.tag !== "style")
+      for (let i = el.kids.length - 1; i >= 0; i--)
+        if (el.kids[i].tag) stack.push(el.kids[i]);
+  }
+  // the root's style attribute
+  if (svgEl.a.style !== undefined) {
+    const d = declarations(svgEl.a.style);
+    if (d.bad) unsupported(`${d.bad} in the style attribute of <svg>`);
+    else
+      for (const [k, v, text] of d.decls)
+        if (!SUBSET.rootStyle[k]?.(v))
+          unsupported(
+            `CSS declaration "${text}" in the style attribute of <svg>`,
+          );
+  }
+  const dark = styles.flatMap((css) => parseDarkSheet(css, unsupported));
+
+  // the canvas: numeric width and height equal to the viewBox, so lengths are px
+  const vb = (svgEl.a.viewBox ?? "")
     .trim()
     .split(/[\s,]+/)
     .map(Number);
-  const hasVb = vb.length === 4 && vb.every(Number.isFinite);
-  const px = (v) => {
-    const m = /^\s*([\d.]+)\s*(?:px)?\s*$/.exec(v ?? "");
-    return m ? +m[1] : null;
-  };
-  const W = px(svgEl.a.width) ?? (hasVb ? vb[2] : null);
-  const H = px(svgEl.a.height) ?? (hasVb ? vb[3] : null);
-  const originX = hasVb ? vb[0] : 0;
-  const originY = hasVb ? vb[1] : 0;
-  // a viewBox drawn at another size scales every length, font sizes included
-  if (hasVb && (Math.abs(W - vb[2]) > 0.5 || Math.abs(H - vb[3]) > 0.5))
-    unsupported(`viewBox scaling (${vb[2]}x${vb[3]} drawn at ${W}x${H})`);
-
-  // ---- the drawn tree, in paint order; anything outside the subset is reported
-  const drawn = [];
-  const defsIds = new Map();
-  const checkAttrs = (el) => {
-    for (const k of SUBSET.props)
-      if (el.a[k] !== undefined || (el.style && k in el.style))
-        unsupported(`${k} on <${el.tag}>`);
-    if (el.style && "transform" in el.style)
-      unsupported(`transform in the style attribute of <${el.tag}>`);
-    if (el.a.transform !== undefined) {
-      const t = parseTransform(el.a.transform);
-      if (t.bad) unsupported(`transform ${t.bad} on <${el.tag}>`);
-      else el.shift = t.xy;
-    }
-  };
-  const collectIds = (el) => {
-    for (const k of el.kids)
-      if (k.tag) {
-        if (k.a.id) defsIds.set(k.a.id, k.tag);
-        collectIds(k);
-      }
-  };
-  const visit = (el) => {
-    for (const k of el.kids) {
-      if (k.text !== undefined) continue;
-      if (k.tag === "defs") collectIds(k);
-      if (SUBSET.inert.has(k.tag)) continue;
-      checkAttrs(k);
-      if (SUBSET.containers.has(k.tag)) visit(k);
-      else if (SUBSET.shapes.has(k.tag) || k.tag === "text") {
-        k.ord = drawn.length;
-        drawn.push(k);
-        for (const c of k.kids)
-          if (c.tag && c.tag !== "title" && c.tag !== "desc")
-            unsupported(`<${c.tag}>`);
-      } else unsupported(`<${k.tag}>`);
-    }
-  };
-  checkAttrs(svgEl);
-  visit(svgEl);
-  // content of <defs> is not drawn unless something references it
-  if (defsIds.size) {
-    const refs = new Set();
-    const scan = (s) => {
-      for (const m of s.matchAll(/url\(\s*['"]?#([^'")\s]+)/g)) refs.add(m[1]);
-    };
-    const walk = (el) => {
-      for (const k of el.kids)
-        if (k.tag) {
-          for (const [n, v] of Object.entries(k.a)) {
-            scan(v);
-            if (/(^|:)href$/.test(n) && v.startsWith("#")) refs.add(v.slice(1));
-          }
-          walk(k);
-        }
-    };
-    walk(root);
-    styles.forEach(scan);
-    for (const id of refs)
-      if (defsIds.has(id))
-        unsupported(`reference to #${id}, a <${defsIds.get(id)}> in <defs>`);
+  if (
+    !isViewBox(svgEl.a.viewBox ?? "") ||
+    !isSize(svgEl.a.width ?? "") ||
+    !isSize(svgEl.a.height ?? "")
+  ) {
+    unsupported("<svg> without a numeric width, height and viewBox");
+    return done();
   }
-  // painted elements under each container, for its opacity
-  for (const d of drawn)
-    for (let p = d.parent; p && p.tag !== "#root"; p = p.parent)
-      p.painted = (p.painted ?? 0) + 1;
+  const W = +svgEl.a.width;
+  const H = +svgEl.a.height;
+  if (Math.abs(W - vb[2]) > 0.5 || Math.abs(H - vb[3]) > 0.5)
+    unsupported(`viewBox scaling (${vb[2]}x${vb[3]} drawn at ${W}x${H})`);
+  const [originX, originY] = vb;
 
-  // ---- computed values, cached per element and theme
+  // ---- computed values
 
+  // a property in a theme: the last dark rule selecting the element, else its attribute,
+  // else (font-family) the root's, else the initial value
+  const prop = (el, name, theme) => {
+    if (theme === "dark")
+      for (let i = dark.length - 1; i >= 0; i--) {
+        const r = dark[i];
+        if (r.tag === el.tag && el.a[r.attr] === r.value && name in r.props)
+          return r.props[name];
+      }
+    if (el.a[name] !== undefined) return el.a[name];
+    if (name === "font-family") return svgEl.a[name];
+    return INITIAL[name];
+  };
   const memo = (el, key, f) => {
     el.memo ??= new Map();
     if (!el.memo.has(key)) el.memo.set(key, f());
     return el.memo.get(key);
   };
-  // an opacity-like value in [0, 1]; an unreadable one is reported and read as 1
-  const alphaProp = (el, prop, theme) => {
-    const v = computed(el, prop, theme, ctx).trim();
-    const a = alphaOf(v);
-    if (!Number.isNaN(a)) return a;
-    unsupported(`${prop} "${v}" on <${el.tag}>`);
-    return 1;
-  };
-  // the containers' opacity: modelled for one painted descendant only
-  const groupAlpha = (el, theme) => {
-    let k = 1;
-    for (let p = el.parent; p && p.tag !== "#root"; p = p.parent) {
-      const a = alphaProp(p, "opacity", theme);
-      if (a !== 1 && p.painted > 1)
-        unsupported(
-          `opacity on <${p.tag}> over ${p.painted} painted elements (group compositing is not modelled)`,
-        );
-      k *= a;
-    }
-    return k;
-  };
-  // effective { raw, color, alpha } of fill or stroke in a theme; alpha 0 paints
-  // nothing, NaN is a paint the audit cannot read
-  const paintOf = (el, attr, theme) =>
-    memo(el, `${attr} ${theme}`, () => {
-      let raw = computed(el, attr, theme, ctx);
-      if (/^currentcolor$/i.test(raw)) raw = computed(el, "color", theme, ctx);
-      let color = parseColor(raw);
-      if (color)
-        color = withAlpha(
-          color,
-          alphaProp(el, `${attr}-opacity`, theme) *
-            alphaProp(el, "opacity", theme) *
-            groupAlpha(el, theme),
-        );
-      return { raw, color, alpha: isNone(raw) ? 0 : color ? color.a : NaN };
+  const num = (el, name) => (el.a[name] === undefined ? 0 : +el.a[name]);
+  // effective { raw, color, alpha } of a channel in a theme; alpha 0 paints nothing
+  const paintOf = (el, ch, theme) =>
+    memo(el, `${ch} ${theme}`, () => {
+      const raw = prop(el, ch, theme);
+      const color = parseColor(raw);
+      let alpha = color ? color.a : 0;
+      if (ch === "stroke" && !(+prop(el, "stroke-width", theme) > 0)) alpha = 0;
+      return { raw, color, alpha };
     });
-  const len = (el, name, total) => {
-    const v = lengthOf(el.a[name], total);
-    if (!Number.isNaN(v)) return v;
-    unsupported(`${name}="${el.a[name]}" on <${el.tag}>`);
-    return 0;
-  };
-  const offset = (el) => {
-    let x = 0;
-    let y = 0;
-    for (const p of chain(el))
-      if (p.shift) {
-        x += p.shift[0];
-        y += p.shift[1];
-      }
-    return [x, y];
-  };
-  const pointsOf = (s) => {
-    const n = (s ?? "")
-      .trim()
-      .split(/[\s,]+/)
-      .filter(Boolean)
-      .map(Number);
-    if (n.length % 2 || n.some(Number.isNaN)) return null;
-    const pts = [];
-    for (let i = 0; i < n.length; i += 2) pts.push([n[i], n[i + 1]]);
-    return pts;
-  };
-  // a shape's geometry with the translates applied: { kind, box, ... }; box is null
+  const half = (e, theme) => +prop(e, "stroke-width", theme) / 2;
+
+  // a shape's geometry with the translates applied: { kind, box, area, ... }; box is null
   // when the shape draws nothing
   const geom = (e) =>
     memo(e, "geom", () => {
-      const [dx, dy] = offset(e);
-      const at = (pts) => pts.map(([x, y]) => [x + dx, y + dy]);
-      let subpaths;
+      const dx = e.dx;
+      const dy = e.dy;
       if (e.tag === "rect") {
-        const x = len(e, "x", W) + dx;
-        const y = len(e, "y", H) + dy;
-        const w = len(e, "width", W);
-        const h = len(e, "height", H);
+        const x = num(e, "x") + dx;
+        const y = num(e, "y") + dy;
+        const w = num(e, "width");
+        const h = num(e, "height");
         if (!(w > 0 && h > 0)) return { kind: "rect", box: null, w: 0, h: 0 };
-        let rx = e.a.rx === undefined ? undefined : len(e, "rx", W);
-        let ry = e.a.ry === undefined ? undefined : len(e, "ry", H);
-        rx ??= ry ?? 0;
-        ry ??= rx;
+        const r = num(e, "rx");
         return {
           kind: "rect",
           box: [x, y, x + w, y + h],
           w,
           h,
-          rx: Math.min(rx, w / 2),
-          ry: Math.min(ry, h / 2),
+          rx: Math.min(r, w / 2),
+          ry: Math.min(r, h / 2),
+          area: true,
         };
       }
-      if (e.tag === "circle" || e.tag === "ellipse") {
-        const cx = len(e, "cx", W) + dx;
-        const cy = len(e, "cy", H) + dy;
-        const rx = len(e, e.tag === "circle" ? "r" : "rx", W);
-        const ry = len(e, e.tag === "circle" ? "r" : "ry", H);
-        if (!(rx > 0 && ry > 0)) return { kind: "ellipse", box: null };
+      if (e.tag === "circle") {
+        const c = [num(e, "cx") + dx, num(e, "cy") + dy];
+        const r = num(e, "r");
+        if (!(r > 0)) return { kind: "circle", box: null };
         return {
-          kind: "ellipse",
-          box: [cx - rx, cy - ry, cx + rx, cy + ry],
-          cx,
-          cy,
-          rx,
-          ry,
+          kind: "circle",
+          box: [c[0] - r, c[1] - r, c[0] + r, c[1] + r],
+          c,
+          r,
+          area: true,
         };
       }
+      let subpaths;
       if (e.tag === "line")
         subpaths = [
           {
-            pts: at([
-              [len(e, "x1", W), len(e, "y1", H)],
-              [len(e, "x2", W), len(e, "y2", H)],
-            ]),
+            pts: [
+              [num(e, "x1"), num(e, "y1")],
+              [num(e, "x2"), num(e, "y2")],
+            ],
             closed: false,
           },
         ];
       else if (e.tag === "path") {
         const p = parsePath(e.a.d ?? "");
-        if (p.bad) {
-          unsupported(`path ${p.bad} on <path>`);
-          return { kind: "poly", box: null };
-        }
-        subpaths = p.subpaths.map((s) => ({ ...s, pts: at(s.pts) }));
+        if (p.tooLarge)
+          issue(
+            `too large: ${p.tooLarge} path tokens (limit ${LIMITS.numbers})`,
+          );
+        else if (p.bad) unsupported(`${p.bad} on <path>`);
+        if (!p.subpaths) return { kind: "poly", box: null };
+        subpaths = p.subpaths;
       } else {
-        const pts = pointsOf(e.a.points);
-        if (!pts) {
-          unsupported(`points="${e.a.points}" on <${e.tag}>`);
+        const n = (e.a.points ?? "")
+          .trim()
+          .split(/[\s,]+/)
+          .filter(Boolean);
+        if (n.length > LIMITS.numbers) {
+          issue(
+            `too large: ${n.length} numbers in points (limit ${LIMITS.numbers})`,
+          );
           return { kind: "poly", box: null };
         }
-        subpaths = [{ pts: at(pts), closed: e.tag === "polygon" }];
+        if (n.length % 2 || !n.every((t) => NUMBER_RE.test(t))) {
+          unsupported(`points="${e.a.points}" on <polyline>`);
+          return { kind: "poly", box: null };
+        }
+        const pts = [];
+        for (let i = 0; i < n.length; i += 2) pts.push([+n[i], +n[i + 1]]);
+        subpaths = [{ pts, closed: false }];
       }
-      const all = subpaths.flatMap((s) => s.pts);
-      if (!all.length) return { kind: "poly", box: null };
-      const xs = all.map((p) => p[0]);
-      const ys = all.map((p) => p[1]);
+      subpaths = subpaths
+        .map((s) => ({ ...s, pts: s.pts.map(([x, y]) => [x + dx, y + dy]) }))
+        .filter((s) => s.pts.length);
+      if (!subpaths.length) return { kind: "poly", box: null };
       return {
         kind: "poly",
-        box: [
-          Math.min(...xs),
-          Math.min(...ys),
-          Math.max(...xs),
-          Math.max(...ys),
-        ],
+        box: union(
+          subpaths.flatMap((s) => s.pts.map(([x, y]) => [x, y, x, y])),
+        ),
         subpaths,
+        area: subpaths.some((s) => hasArea(s.pts)),
       };
     });
-  // how far a shape's stroke reaches outside its geometry: half the width, more at a
-  // square cap or a mitred join (the miter's own length, up to the miter limit)
-  const strokeReach = (e, theme) =>
-    memo(e, `reach ${theme}`, () => {
-      const raw = computed(e, "stroke-width", theme, ctx);
-      let w = fontPx(raw);
-      if (Number.isNaN(w)) {
-        unsupported(`stroke-width "${raw}" on <${e.tag}>`);
-        w = 1;
-      }
-      let k = 1;
-      if (computed(e, "stroke-linecap", theme, ctx).trim() === "square")
-        k = Math.SQRT2;
-      const g = geom(e);
-      if (
-        g.kind === "poly" &&
-        g.box &&
-        computed(e, "stroke-linejoin", theme, ctx).trim() === "miter"
-      ) {
-        const limit = numberOr(computed(e, "stroke-miterlimit", theme, ctx), 4);
-        for (const { pts, closed } of g.subpaths)
-          for (let i = 0; i < pts.length; i++) {
-            if (!closed && (i === 0 || i === pts.length - 1)) continue;
-            const a = pts[(i - 1 + pts.length) % pts.length];
-            const b = pts[i];
-            const c = pts[(i + 1) % pts.length];
-            const u = Math.atan2(a[1] - b[1], a[0] - b[0]);
-            const v = Math.atan2(c[1] - b[1], c[0] - b[0]);
-            const ratio = 1 / Math.abs(Math.sin((u - v) / 2));
-            if (Number.isFinite(ratio) && ratio <= limit)
-              k = Math.max(k, ratio);
-          }
-      }
-      return (w / 2) * k;
+  // does the shape's fill paint inside box b?
+  const fillMeets = (e, b) => {
+    const g = geom(e);
+    if (!g.box || !g.area) return false;
+    if (g.kind === "rect") return rectMeets(g, b);
+    if (g.kind === "circle") return discMeets(g.c, g.r, b);
+    return polyMeets(g, b);
+  };
+  // the stroke's shape: its caps and joins, and how far it reaches past its geometry
+  const strokeForm = (e, theme) =>
+    memo(e, `form ${theme}`, () => {
+      const d = half(e, theme);
+      const cap = prop(e, "stroke-linecap", theme).trim();
+      const join = prop(e, "stroke-linejoin", theme).trim();
+      const joinReach = join === "miter" ? MITER_LIMIT * d : d;
+      const capReach = cap === "square" ? Math.SQRT2 * d : d;
+      return { d, cap, joinReach, reach: Math.max(d, joinReach, capReach) };
     });
-  const fillRule = (e, theme) =>
-    memo(e, `rule ${theme}`, () => computed(e, "fill-rule", theme, ctx).trim());
-  // the box a channel can paint in a theme, stroke reach included; null when it paints
-  // nothing (alpha 0, or no geometry)
-  const reachBox = (e, attr, theme) =>
-    memo(e, `reach box ${attr} ${theme}`, () => {
+  // the box a channel can paint in, or null
+  const reachBox = (e, ch, theme) =>
+    memo(e, `reach ${ch} ${theme}`, () => {
       const g = geom(e);
-      if (!g.box || paintOf(e, attr, theme).alpha === 0) return null;
-      return attr === "fill" ? g.box : grow(g.box, strokeReach(e, theme));
+      if (!g.box || paintOf(e, ch, theme).alpha === 0) return null;
+      if (ch === "fill") return g.area ? g.box : null;
+      return grow(
+        g.box,
+        g.kind === "poly" ? strokeForm(e, theme).reach : half(e, theme),
+      );
     });
-  // does a channel paint inside the box b? Exact for the subset's geometry: a stroke is
-  // every point within its reach of the outline (a butt cap is counted as round), and a
-  // rect or ellipse stroke leaves its inner region free
-  const meets = (e, attr, theme, b) => {
-    const r = reachBox(e, attr, theme);
+  // does the shape's stroke paint inside box b? Exact for rect and circle bands and for
+  // straight segments with butt, square or round caps; a join counts as a disc of its
+  // largest reach around the vertex
+  const strokeMeets = (e, b, theme) => {
+    const r = reachBox(e, "stroke", theme);
     if (!r || !overlaps(r, b)) return false;
     const g = geom(e);
-    if (attr === "fill")
-      return g.kind === "rect"
-        ? rectMeets(g, b)
-        : g.kind === "ellipse"
-          ? ellipseMeets(g.cx, g.cy, g.rx, g.ry, b)
-          : polyMeets(g, b, fillRule(e, theme));
-    const d = strokeReach(e, theme);
-    if (g.kind === "poly")
-      return g.subpaths.some(({ pts, closed }) =>
-        pts.some(
-          (p, i) =>
-            (closed || i < pts.length - 1 || pts.length === 1) &&
-            segmentToBox(p, pts[(i + 1) % pts.length], b) <= d,
-        ),
+    const d = half(e, theme);
+    if (g.kind === "rect") {
+      const inner = [g.box[0] + d, g.box[1] + d, g.box[2] - d, g.box[3] - d];
+      return !(
+        inner[0] < inner[2] &&
+        inner[1] < inner[3] &&
+        rectHolds(
+          { box: inner, rx: Math.max(0, g.rx - d), ry: Math.max(0, g.ry - d) },
+          b,
+        )
       );
-    const outer =
-      g.kind === "rect"
-        ? rectMeets(
-            { ...g, rx: g.rx && g.rx + d, ry: g.ry && g.ry + d, box: r },
-            b,
+    }
+    if (g.kind === "circle")
+      return (
+        discMeets(g.c, g.r + d, b) &&
+        !(
+          g.r > d &&
+          corners(b).every(
+            (p) => Math.hypot(p[0] - g.c[0], p[1] - g.c[1]) <= g.r - d,
           )
-        : ellipseMeets(g.cx, g.cy, g.rx + d, g.ry + d, b);
-    const inner = shrink(g, d);
-    return outer && !(inner && containsBox(inner, b));
+        )
+      );
+    const { cap, joinReach } = strokeForm(e, theme);
+    for (const { pts, closed } of g.subpaths) {
+      const n = pts.length;
+      const moves = pts.some((p) => p[0] !== pts[0][0] || p[1] !== pts[0][1]);
+      if (!moves) {
+        // a zero-length subpath: a dot for a round or square cap
+        if (cap !== "butt" && discMeets(pts[0], Math.SQRT2 * d, b)) return true;
+        continue;
+      }
+      const segs = closed ? n : n - 1;
+      for (let i = 0; i < segs; i++) {
+        const a = pts[i];
+        const c = pts[(i + 1) % n];
+        const sq = (end) => (!closed && end && cap === "square" ? d : 0);
+        if (bandMeets(a, c, d, sq(i === 0), sq(i === segs - 1), b)) return true;
+      }
+      for (let i = 0; i < n; i++) {
+        const end = !closed && (i === 0 || i === n - 1);
+        const radius = end ? (cap === "round" ? d : 0) : joinReach;
+        if (radius > 0 && discMeets(pts[i], radius, b)) return true;
+      }
+    }
+    return false;
   };
+  const channelMeets = (e, ch, b, theme) =>
+    ch === "fill"
+      ? paintOf(e, "fill", theme).alpha > 0 && fillMeets(e, b)
+      : strokeMeets(e, b, theme);
 
   const isCanvas = (e) => {
     if (e.tag !== "rect") return false;
     const g = geom(e);
     return (
       g.box !== null &&
-      W !== null &&
-      H !== null &&
       Math.abs(g.box[0] - originX) < 0.5 &&
       Math.abs(g.box[1] - originY) < 0.5 &&
       Math.abs(g.w - W) < 0.5 &&
       Math.abs(g.h - H) < 0.5
     );
   };
+  // a gridline or rule: a line, path or polyline stroked in the grid colour
+  const isGridHairline = (e) => {
+    if (!HAIRLINES.has(e.tag)) return false;
+    const c = paintOf(e, "stroke", "light").color;
+    return c !== null && c.rgb.every((v, i) => v === grid.rgb[i]);
+  };
   const shapes = drawn.filter((e) => e.tag !== "text");
   const texts = drawn.filter((e) => e.tag === "text");
-
-  // ---- every painted channel must be readable, in each theme
-  for (const theme of THEMES) {
-    for (const e of shapes)
-      for (const attr of SUBSET.shapes.get(e.tag)) {
-        const p = paintOf(e, attr, theme);
-        if (!Number.isNaN(p.alpha) || !geom(e).box) continue;
-        out.push(
-          isCanvas(e) && attr === "fill"
-            ? `${theme}: full-canvas rect fill ${p.raw} cannot be read: the page colour is unknown`
-            : `${theme}: ${e.tag} ${attr} has a colour the audit cannot read (${p.raw})`,
-        );
-      }
-    if (
-      !shapes.some((e) => isCanvas(e) && paintOf(e, "fill", theme).alpha !== 0)
-    )
+  for (const theme of THEMES)
+    if (!shapes.some((e) => isCanvas(e) && paintOf(e, "fill", theme).alpha > 0))
       notes.add(FALLBACK_NOTE);
-  }
+
+  // ---- backdrops: the rects painted before an element, over the region it paints
+  // (region: { box, meets(b) }). Each cell of the plane cut by those rects' edges (and
+  // their corner radii) inside the region is composited on its own; a cell a rounded
+  // corner crosses counts with and without that rect.
+  const rectFills = Object.fromEntries(
+    THEMES.map((t) => [
+      t,
+      shapes.filter(
+        (e) =>
+          e.tag === "rect" && geom(e).box && paintOf(e, "fill", t).alpha > 0,
+      ),
+    ]),
+  );
+  const otherFills = Object.fromEntries(
+    THEMES.map((t) => [
+      t,
+      shapes.filter(
+        (e) =>
+          e.tag !== "rect" &&
+          SHAPES.get(e.tag).includes("fill") &&
+          geom(e).area &&
+          paintOf(e, "fill", t).alpha > 0,
+      ),
+    ]),
+  );
+  const backdrop = (theme, ord, region) => {
+    const rs = [];
+    for (const r of rectFills[theme]) {
+      if (r.ord >= ord) break;
+      if (overlaps(geom(r).box, region.box) && region.meets(geom(r).box))
+        rs.push(r);
+    }
+    const [bx0, by0, bx1, by1] = region.box;
+    const xs = new Set([bx0, bx1]);
+    const ys = new Set([by0, by1]);
+    for (const r of rs) {
+      const { box, rx, ry } = geom(r);
+      for (const x of [box[0], box[2], box[0] + rx, box[2] - rx])
+        if (x > bx0 && x < bx1) xs.add(x);
+      for (const y of [box[1], box[3], box[1] + ry, box[3] - ry])
+        if (y > by0 && y < by1) ys.add(y);
+    }
+    const X = [...xs].sort((a, b) => a - b);
+    const Y = [...ys].sort((a, b) => a - b);
+    if ((X.length - 1) * (Y.length - 1) > LIMITS.regions) return null;
+    const colours = new Map();
+    for (let i = 0; i + 1 < X.length; i++)
+      for (let j = 0; j + 1 < Y.length; j++) {
+        const cell = [X[i], Y[j], X[i + 1], Y[j + 1]];
+        if (!region.meets(cell)) continue;
+        let layers = [FALLBACK_PAGE[theme]];
+        for (const r of rs) {
+          const g = geom(r);
+          const c = paintOf(r, "fill", theme).color;
+          if (rectHolds(g, cell)) layers = layers.map((l) => over(c, l));
+          else if (rectMeets(g, cell))
+            layers = [...layers, ...layers.map((l) => over(c, l))];
+          if (layers.length > LIMITS.layers) return null;
+        }
+        for (const l of layers)
+          colours.set(l.map((v) => v.toFixed(3)).join(), l);
+        if (colours.size > LIMITS.layers) return null;
+      }
+    return [...colours.values()];
+  };
+  // both ways: each backdrop with and without a layer of colour c on top
+  const withLayer = (bgs, c) => {
+    const more = new Map(
+      bgs.map((l) => [l.map((v) => v.toFixed(3)).join(), l]),
+    );
+    for (const l of bgs) {
+      const t = over(c, l);
+      more.set(t.map((v) => v.toFixed(3)).join(), t);
+    }
+    return more.size > LIMITS.layers ? null : [...more.values()];
+  };
 
   // ---- text: size, backdrop, and nothing drawn over it
   const content = (t) =>
@@ -1232,170 +1338,133 @@ export function auditSvg(
       .join("")
       .replace(/\s+/g, " ")
       .trim();
-  const anchorOf = (t) =>
-    memo(t, "anchor", () => {
-      for (const n of ["x", "y"])
-        if ((t.a[n] ?? "").trim().split(/[\s,]+/).length > 1)
-          unsupported(`${n} list on <text>`);
-      const [dx, dy] = offset(t);
-      const first = (n, total) => {
-        const v = lengthOf(t.a[n]?.trim().split(/[\s,]+/)[0], total);
-        if (!Number.isNaN(v)) return v;
-        unsupported(`${n}="${t.a[n]}" on <text>`);
-        return 0;
-      };
-      return [first("x", W) + dx, first("y", H) + dy];
-    });
-  // the estimated glyph boxes of a text in a theme ({ box, cells }: their union and the
-  // inked ones); null when its size cannot be read or nothing is inked
-  const textBox = (t, theme) =>
-    memo(t, `box ${theme}`, () => {
-      const size = fontPx(computed(t, "font-size", theme, ctx));
-      if (!Number.isFinite(size)) return null;
-      const { width, cells } = glyphCells(
-        content(t),
-        size,
-        computed(t, "font-weight", theme, ctx).trim(),
+  const shown = [];
+  for (const t of texts) {
+    const s = content(t);
+    if (!s) continue;
+    if ([...s].length > LIMITS.textChars) {
+      issue(
+        `too large: a text of ${[...s].length} characters (limit ${LIMITS.textChars})`,
       );
-      const anchor = computed(t, "text-anchor", theme, ctx).trim();
-      const share = { start: 0, middle: 0.5, end: 1 }[anchor];
-      if (share === undefined) unsupported(`text-anchor "${anchor}"`);
+      continue;
+    }
+    if (prop(t, "font-family", "light") === undefined) {
+      unsupported(
+        "text without a font-family (the UA default font is not modelled)",
+      );
+      continue;
+    }
+    if (paintOf(t, "stroke", "dark").alpha > 0)
+      unsupported("stroke on <text> from the dark rules");
+    shown.push(t);
+  }
+  const shownSet = new Set(shown);
+  const anchorOf = (t) => [num(t, "x") + t.dx, num(t, "y") + t.dy];
+  const sizeOf = (t) => +prop(t, "font-size", "light");
+  // the cells a text's glyphs can occupy, absolute, and their union
+  const glyphsOf = (t) =>
+    memo(t, "glyphs", () => {
       const [x, y] = anchorOf(t);
-      const x0 = x - width * (share ?? 0);
-      const inked = cells
-        .filter((c) => c.ink)
-        .map((c) => [x0 + c.x0, y - c.up, x0 + c.x1, y + c.down]);
-      if (!inked.length) return null;
-      return {
-        box: [0, 1, 2, 3].map((i) =>
-          (i < 2 ? Math.min : Math.max)(...inked.map((c) => c[i])),
-        ),
-        cells: inked,
-      };
+      const w = prop(t, "font-weight", "light").trim();
+      const bold = w === "bold" || +w >= 600;
+      const share = { start: 0, middle: 0.5, end: 1 }[
+        prop(t, "text-anchor", "light").trim()
+      ];
+      const cells = glyphCells(content(t), sizeOf(t), bold, share).map((c) => [
+        c[0] + x,
+        c[1] + y,
+        c[2] + x,
+        c[3] + y,
+      ]);
+      return cells.length ? { cells, box: union(cells) } : null;
     });
-  // does a channel paint over any of a text's glyphs?
-  const meetsText = (e, attr, theme, tb) =>
-    overlaps(reachBox(e, attr, theme) ?? [0, 0, 0, 0], tb.box) &&
-    tb.cells.some((c) => meets(e, attr, theme, c));
-  // drawn text with something to show
-  const shown = texts.filter((t) => content(t));
-
-  // rects that carry a fill in either theme, for the figure-box floor
-  const rects = shapes
-    .filter(
+  const paints = (t, theme) => paintOf(t, "fill", theme).alpha > 0;
+  // rects that carry a fill in a theme, for the figure-box floor
+  const filledRects = (theme) =>
+    shapes.filter(
       (e) =>
         e.tag === "rect" &&
         !isCanvas(e) &&
-        THEMES.some((t) => paintOf(e, "fill", t).alpha !== 0),
-    )
-    .filter((e) => geom(e).w > 3 && geom(e).h > 3);
-  // a gridline or rule: a line, path or polyline stroked in the grid colour
-  const isGridHairline = (e) => {
-    if (!HAIRLINES.has(e.tag)) return false;
-    const c = paintOf(e, "stroke", "light").color;
-    return c !== null && c.rgb.every((v, i) => v === grid.rgb[i]);
-  };
-  // a partial layer is composited both ways, so their count is capped
-  const MAX_PARTIAL = 8;
+        paintOf(e, "fill", theme).alpha > 0 &&
+        geom(e).w > 3 &&
+        geom(e).h > 3,
+    );
+  const boxRects = Object.fromEntries(THEMES.map((t) => [t, filledRects(t)]));
 
   for (const t of shown) {
     const s = content(t);
     const [x, y] = anchorOf(t);
-    const sizeRaw = (theme) => computed(t, "font-size", theme, ctx);
-    const size = fontPx(sizeRaw("light"));
-    // a figure box: the smallest filled rect around the text's anchor, stroked, over 40x20
-    const around = rects.filter((r) => {
-      const [x0, y0, x1, y1] = geom(r).box;
-      const ay = y - size * 0.35;
-      return x > x0 && x < x1 && ay > y0 && ay < y1;
-    });
-    const underAll = [...around].sort(
-      (a, b) => geom(a).w * geom(a).h - geom(b).w * geom(b).h,
-    );
-    const under =
-      underAll.find((r) => paintOf(r, "fill", "light").alpha !== 0) ??
-      underAll[0];
-    const isBox =
-      under &&
-      paintOf(under, "stroke", "light").alpha !== 0 &&
-      geom(under).w > 40 &&
-      geom(under).h > 20;
+    const px = sizeOf(t);
+    const glyphs = glyphsOf(t);
+    const sizeIssues = {};
     for (const theme of THEMES) {
-      // the dark size is only audited when a dark rule changes it
-      if (theme === "dark" && sizeRaw("dark") === sizeRaw("light")) continue;
-      const pre = theme === "dark" ? "dark: " : "";
-      const px = fontPx(sizeRaw(theme));
-      if (!Number.isFinite(px)) {
-        out.push(
-          `${pre}"${s}" has a font-size the audit cannot read (${sizeRaw(theme)})`,
-        );
-        continue;
+      sizeIssues[theme] = [];
+      if (!paints(t, theme)) continue; // a text that paints nothing is not read
+      // a figure box: the smallest filled rect around the anchor, stroked, over 40x20
+      let under = null;
+      for (const r of boxRects[theme]) {
+        const [x0, y0, x1, y1] = geom(r).box;
+        const ay = y - px * 0.35;
+        if (x > x0 && x < x1 && ay > y0 && ay < y1)
+          if (!under || geom(r).w * geom(r).h < geom(under).w * geom(under).h)
+            under = r;
       }
+      const isBox =
+        under &&
+        paintOf(under, "stroke", theme).alpha > 0 &&
+        geom(under).w > 40 &&
+        geom(under).h > 20;
       const shownPx = Math.round(px * 100) / 100;
       if (px < minText)
-        out.push(`${pre}"${s}" is ${shownPx}px (floor ${minText}px)`);
+        sizeIssues[theme].push(`"${s}" is ${shownPx}px (floor ${minText}px)`);
       if (isBox && px < minBoxText)
-        out.push(
-          `${pre}"${s}" is ${shownPx}px inside a figure box (floor ${minBoxText}px)`,
+        sizeIssues[theme].push(
+          `"${s}" is ${shownPx}px inside a figure box (floor ${minBoxText}px)`,
         );
     }
+    out.push(...sizeIssues.light);
+    for (const m of sizeIssues.dark)
+      if (!sizeIssues.light.includes(m)) out.push(`dark: ${m}`);
+
+    if (!glyphs) continue;
+    const region = {
+      box: glyphs.box,
+      meets: (b) => glyphs.cells.some((c) => overlaps(c, b)),
+    };
     for (const theme of THEMES) {
-      if (paintOf(t, "stroke", theme).alpha !== 0)
-        unsupported(`stroke on <text> "${s}"`);
+      if (!paints(t, theme)) continue;
       const p = paintOf(t, "fill", theme);
-      if (p.alpha === 0) continue; // fill:none draws nothing
-      if (!p.color) {
+      // a filled non-rect shape under a glyph: how much of it it covers is not modelled
+      const other = otherFills[theme].find(
+        (e) =>
+          e.ord < t.ord &&
+          overlaps(geom(e).box, glyphs.box) &&
+          glyphs.cells.some((c) => fillMeets(e, c)),
+      );
+      if (other) {
         out.push(
-          `${theme}: "${s}" has a fill the audit cannot read (${p.raw})`,
+          `${theme}: "${s}": cannot verify the backdrop (${article(other.tag)} drawn before it)`,
         );
         continue;
       }
-      const tb = textBox(t, theme);
-      if (!tb) continue;
-      // the backdrop: what is painted before the text under its glyphs. A rect fill that
-      // holds every glyph is always behind it; a rect fill or a stroke under some glyphs
-      // is behind those only, so the text is checked with and without each one. A grid
-      // hairline is decoration, as for marks.
-      const full = [];
-      const partial = [];
+      let bgs = backdrop(theme, t.ord, region);
+      // a stroke drawn before the text under a glyph: both ways (a grid hairline is decoration)
       for (const e of shapes) {
-        if (e.ord > t.ord) break;
-        for (const attr of SUBSET.shapes.get(e.tag)) {
-          if (!meetsText(e, attr, theme, tb)) continue;
-          const f = paintOf(e, attr, theme);
-          if (!f.color) {
-            out.push(
-              `${theme}: "${s}" sits on ${article(e.tag)} with a ${attr} the audit cannot read (${f.raw})`,
-            );
-            continue;
-          }
-          if (attr === "stroke" && isGridHairline(e)) continue;
-          const layer = { ord: e.ord + (attr === "stroke" ? 0.5 : 0), f };
-          if (attr === "stroke" || e.tag === "rect")
-            (attr === "fill" && containsBox(geom(e), tb.box)
-              ? full
-              : partial
-            ).push(layer);
-          else
-            out.push(
-              `${theme}: "${s}" is drawn over ${article(e.tag)} (fill ${f.raw}): the audit cannot verify how much of it the ${e.tag} covers`,
-            );
-        }
+        if (!bgs || e.ord > t.ord) break;
+        if (isGridHairline(e) || !reachBox(e, "stroke", theme)) continue;
+        if (!overlaps(reachBox(e, "stroke", theme), glyphs.box)) continue;
+        if (glyphs.cells.some((c) => strokeMeets(e, c, theme)))
+          bgs = withLayer(bgs, paintOf(e, "stroke", theme).color);
       }
-      if (partial.length > MAX_PARTIAL) {
-        out.push(
-          `${theme}: "${s}" is over ${partial.length} shapes that each cover part of it: the audit cannot verify it`,
+      if (!bgs) {
+        issue(
+          `too large: the backdrop of "${s}" in ${theme} has more than ${LIMITS.regions} regions or ${LIMITS.layers} colours`,
         );
         continue;
       }
       let worst = Infinity;
-      for (let mask = 0; mask < 1 << partial.length; mask++) {
-        const layers = [...full, ...partial.filter((_, i) => mask & (1 << i))];
-        layers.sort((a, b) => a.ord - b.ord);
-        let bg = FALLBACK_PAGE[theme];
-        for (const l of layers) bg = over(l.f.color, bg);
+      for (const bg of bgs)
         worst = Math.min(worst, contrast(over(p.color, bg), bg));
-      }
       if (worst < 4.5)
         out.push(
           `${theme}: "${s}" ${p.raw} at ${worst.toFixed(2)}:1 (needs 4.5:1)`,
@@ -1405,18 +1474,22 @@ export function auditSvg(
         if (e.ord <= t.ord) continue;
         let cover = null;
         if (e.tag === "text") {
-          const later = content(e) && textBox(e, theme);
+          const later = shownSet.has(e) && paints(e, theme) && glyphsOf(e);
           if (
             later &&
-            paintOf(e, "fill", theme).alpha !== 0 &&
-            overlaps(later.box, tb.box) &&
-            later.cells.some((c) => tb.cells.some((d) => overlaps(c, d)))
+            overlaps(later.box, glyphs.box) &&
+            later.cells.some((c) => glyphs.cells.some((d) => overlaps(c, d)))
           )
             cover = "fill";
         } else
-          cover = SUBSET.shapes
-            .get(e.tag)
-            .find((attr) => meetsText(e, attr, theme, tb));
+          cover = SHAPES.get(e.tag).find((ch) => {
+            const r = reachBox(e, ch, theme);
+            return (
+              r &&
+              overlaps(r, glyphs.box) &&
+              glyphs.cells.some((c) => channelMeets(e, ch, c, theme))
+            );
+          });
         if (cover)
           out.push(
             `${theme}: "${s}" is covered by ${article(e.tag)} drawn after it (${cover} ${paintOf(e, cover, theme).raw}): the audit cannot verify it`,
@@ -1427,150 +1500,102 @@ export function auditSvg(
 
   // ---- non-text marks: series lines, arrows and edges, dots (filled or hollow), solid
   // bars, and small stroke-only tiles. Exempt: the fill of a full-canvas rect (the
-  // page), rects that frame text (a container or a heat-table cell: some rendered text's
-  // anchor lies inside it; the text is measured against it instead), labeled swatches
-  // (a legend key), stripes ≤3px, hairlines drawn in the grid colour (gridlines and
-  // rules are decoration; the axis labels carry the values), and a fill that composites
-  // to the colour under it (a hollow dot's centre). A translucent colour (rgba,
-  // fill/stroke-opacity, opacity) is composited over the colour under it before the 3:1
-  // check, at each of the mark's sample points.
-  const anchors = [];
-  for (const t of shown) {
-    if (isNone(paintOf(t, "fill", "light").raw)) continue;
-    const [x, y] = anchorOf(t);
-    if (!Number.isFinite(x) || !Number.isFinite(y)) continue;
-    const size = fontPx(computed(t, "font-size", "light", ctx));
-    anchors.push([x, y - (Number.isFinite(size) ? size : 0) * 0.35, y]);
-  }
-  const framesText = (e) => {
+  // page), rects that frame text (a container or a heat-table cell: the anchor of a text
+  // painted in that theme lies inside it; the text is measured against it instead),
+  // labeled swatches (a legend key), stripes ≤3px, hairlines drawn in the grid colour
+  // (gridlines and rules are decoration; the axis labels carry the values), and a fill
+  // that composites to exactly the colour under it (a hollow dot's centre). A translucent
+  // colour is composited over each backdrop before the 3:1 check.
+  const anchors = Object.fromEntries(
+    THEMES.map((theme) => [
+      theme,
+      shown
+        .filter((t) => paints(t, theme))
+        .map((t) => {
+          const [x, y] = anchorOf(t);
+          return [x, y - sizeOf(t) * 0.35, y];
+        }),
+    ]),
+  );
+  const framesText = (e, theme) => {
     const [x0, y0, x1, y1] = geom(e).box;
-    return anchors.some(([x, y]) => x > x0 && x < x1 && y > y0 && y < y1);
+    return anchors[theme].some(
+      ([x, y]) => x > x0 && x < x1 && y > y0 && y < y1,
+    );
   };
   // a labeled swatch (a legend key): a rect no larger than 32x20 with a rendered text
   // starting within 12px of its right edge, the baseline within 4px of its vertical
   // extent. The adjacent text carries what the graphic shows (WCAG 1.4.11).
-  const isLabeledSwatch = (e) => {
+  const isLabeledSwatch = (e, theme) => {
     const g = geom(e);
     if (g.w > 32 || g.h > 20) return false;
-    const [x0, y0, x1, y1] = g.box;
-    return anchors.some(
+    const [, y0, x1, y1] = g.box;
+    return anchors[theme].some(
       ([x, , base]) =>
         x >= x1 && x <= x1 + 12 && base >= y0 - 4 && base <= y1 + 4,
     );
   };
-  // where the colour under a mark is read: on the stroke's line, inside the fill
-  const samples = (e, attr) => {
-    const g = geom(e);
-    const [x0, y0, x1, y1] = g.box;
-    const cx = (x0 + x1) / 2;
-    const cy = (y0 + y1) / 2;
-    if (g.kind === "rect") {
-      const i = Math.min(0.5, g.w / 2, g.h / 2);
-      const edges = (d) => [
-        [x0 + d, cy],
-        [x1 - d, cy],
-        [cx, y0 + d],
-        [cx, y1 - d],
-      ];
-      return attr === "fill" ? [[cx, cy], ...edges(i)] : edges(0);
-    }
-    if (g.kind === "ellipse") {
-      const k = attr === "fill" ? 0.5 : 1;
-      const ring = [
-        [g.cx - g.rx * k, g.cy],
-        [g.cx + g.rx * k, g.cy],
-        [g.cx, g.cy - g.ry * k],
-        [g.cx, g.cy + g.ry * k],
-      ];
-      return attr === "fill" ? [[g.cx, g.cy], ...ring] : ring;
-    }
-    // a point moved toward another by up to half a pixel: a sample on a boundary the
-    // mark only touches (an arrow ending at a box edge) reads the side the ink is on
-    const toward = (a, b) => {
-      const d = Math.hypot(b[0] - a[0], b[1] - a[1]);
-      const k = d ? Math.min(0.5, d / 2) / d : 0;
-      return [a[0] + (b[0] - a[0]) * k, a[1] + (b[1] - a[1]) * k];
-    };
-    const pts = [];
-    for (const { pts: v, closed } of g.subpaths) {
-      if (!v.length) continue;
-      if (attr === "fill") {
-        // inside the fill: its centroid and each vertex moved toward it
-        const c = [
-          v.reduce((s, p) => s + p[0], 0) / v.length,
-          v.reduce((s, p) => s + p[1], 0) / v.length,
-        ];
-        pts.push(c, ...v.map((p) => toward(p, c)));
-        continue;
-      }
-      // on the stroke: each vertex (an open end moved along its segment) and midpoint
-      const n = v.length;
-      v.forEach((p, i) =>
-        pts.push(
-          closed || n < 2 || (i > 0 && i < n - 1)
-            ? p
-            : toward(p, v[i === 0 ? 1 : n - 2]),
-        ),
-      );
-      for (let i = 0; i < (closed ? n : n - 1); i++) {
-        const [a, b] = [v[i], v[(i + 1) % n]];
-        pts.push([(a[0] + b[0]) / 2, (a[1] + b[1]) / 2]);
-      }
-    }
-    return pts;
-  };
-  // the colour under a point, from the fills painted before paint order `ord`
-  const fills = Object.fromEntries(
-    THEMES.map((theme) => [
-      theme,
-      shapes.filter(
-        (e) =>
-          SUBSET.shapes.get(e.tag).includes("fill") &&
-          geom(e).box &&
-          paintOf(e, "fill", theme).color?.a > 0,
-      ),
-    ]),
-  );
-  const colourAt = (theme, ord, [x, y]) => {
-    let bg = FALLBACK_PAGE[theme];
-    for (const e of fills[theme]) {
-      if (e.ord >= ord) break;
-      if (inside(geom(e), x, y, fillRule(e, theme)))
-        bg = over(paintOf(e, "fill", theme).color, bg);
-    }
-    return bg;
-  };
-  const checkMark = (e, attr) => {
-    const g = geom(e);
-    if (!g.box) return;
-    if (e.tag === "rect") {
-      if (attr === "fill" && isCanvas(e)) return;
-      if (!(g.w > 3 && g.h > 3)) return;
-      if (framesText(e) || isLabeledSwatch(e)) return;
-    }
-    if (attr === "stroke" && isGridHairline(e)) return;
-    for (const theme of THEMES) {
-      const p = paintOf(e, attr, theme);
-      if (!(p.alpha > 0)) continue; // paints nothing, or reported as unreadable
-      let worst = Infinity;
-      for (const pt of samples(e, attr)) {
-        const bg = colourAt(theme, e.ord, pt);
-        const c = contrast(over(p.color, bg), bg);
-        if (c !== 1) worst = Math.min(worst, c);
-      }
-      if (worst < 3) {
-        const alpha =
-          p.color.a < 1 ? ` (${Math.round(p.color.a * 100)}% opaque)` : "";
-        out.push(
-          `${theme}: ${e.tag} ${attr} ${p.raw}${alpha} at ${worst.toFixed(2)}:1 (marks need 3:1)`,
-        );
-      }
-    }
-  };
   for (const e of shapes)
-    for (const attr of SUBSET.shapes.get(e.tag)) checkMark(e, attr);
+    for (const ch of SHAPES.get(e.tag))
+      for (const theme of THEMES) {
+        const g = geom(e);
+        const box = reachBox(e, ch, theme);
+        if (!box) continue; // paints nothing
+        if (e.tag === "rect") {
+          if (ch === "fill" && isCanvas(e)) continue;
+          if (!(g.w > 3 && g.h > 3)) continue;
+          if (framesText(e, theme) || isLabeledSwatch(e, theme)) continue;
+        }
+        if (ch === "stroke" && isGridHairline(e)) continue;
+        const region = { box, meets: (b) => channelMeets(e, ch, b, theme) };
+        const other = otherFills[theme].find(
+          (o) =>
+            o.ord < e.ord &&
+            overlaps(geom(o).box, box) &&
+            fillMeets(o, box) &&
+            region.meets(geom(o).box),
+        );
+        if (other) {
+          out.push(
+            `${theme}: ${e.tag} ${ch}: cannot verify the backdrop (${article(other.tag)} drawn before it)`,
+          );
+          continue;
+        }
+        let bgs = backdrop(theme, e.ord, region);
+        // a stroke is drawn over its own element's fill
+        const own = paintOf(e, "fill", theme);
+        if (
+          bgs &&
+          ch === "stroke" &&
+          SHAPES.get(e.tag).includes("fill") &&
+          g.area &&
+          own.alpha > 0
+        )
+          bgs = withLayer(bgs, own.color);
+        if (!bgs) {
+          issue(
+            `too large: the backdrop of a ${e.tag} ${ch} in ${theme} has more than ${LIMITS.regions} regions or ${LIMITS.layers} colours`,
+          );
+          continue;
+        }
+        const p = paintOf(e, ch, theme);
+        let worst = Infinity;
+        for (const bg of bgs) {
+          const c = contrast(over(p.color, bg), bg);
+          if (!(ch === "fill" && c === 1)) worst = Math.min(worst, c);
+        }
+        if (worst < 3) {
+          const alpha =
+            p.color.a < 1 ? ` (${Math.round(p.color.a * 100)}% opaque)` : "";
+          out.push(
+            `${theme}: ${e.tag} ${ch} ${p.raw}${alpha} at ${worst.toFixed(2)}:1 (marks need 3:1)`,
+          );
+        }
+      }
   return done();
 }
+
+const article = (tag) => (/^[aeiou]/.test(tag) ? `an ${tag}` : `a ${tag}`);
 
 // ---- CLI ---------------------------------------------------------------------------------
 

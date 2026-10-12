@@ -190,10 +190,11 @@ in a default install. The scripts live in `<skill-dir>/scripts/`, apart from any
 `scripts/` directory of the repository being worked on.
 
 - `<skill-dir>/scripts/svg-audit.mjs`: legibility audit (text size, text and
-  mark contrast, both themes). It certifies only an exactly modelled subset
-  (straight-edged shapes, text without per-glyph placement, `translate()`, no
-  clip, mask, filter, `<use>` or group opacity) and reports anything outside it
-  as an issue; text boxes come from Arial advance widths plus 10%.
+  mark contrast, both themes). It certifies only an allowlisted subset (the
+  elements, attributes, values and dark-mode stylesheet form a chart generator
+  emits: rects, circles, lines, polylines, M/L/H/V/Z paths, plain text,
+  `translate()`, no opacity) and reports anything else as an issue; text widths
+  are bounded by Arial plus 10% and DejaVu Sans, measured per glyph.
   `node <skill-dir>/scripts/svg-audit.mjs [--min-text 9] [--min-box-text 11] [--grid-color '#e4e8ec'] *.svg`,
   or import `auditSvg` into the repo's test. Exit 1 on any issue, 2 on a usage
   or read error; `-h` prints usage.
