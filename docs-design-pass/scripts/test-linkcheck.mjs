@@ -393,3 +393,49 @@ test("CODE lists are not tracked: a list item's indented continuation reads as c
     /undefined reference \[link\]\[x\]/,
   );
 });
+
+// ---- review: a definition's destination may sit on the next line ------------------------------
+
+test("MULTI a definition whose destination is on the next line is checked", () => {
+  expectBroken(
+    check("[guide][x]\n\n[x]:\n  missing.md\n"),
+    1,
+    /a\.md:3: missing file missing\.md/,
+  );
+});
+test("MULTI a next-line destination to an existing file passes", () => {
+  expectClean(check("[guide][x]\n\n[x]:\n  b.md\n", { "b.md": "# B\n" }), 2);
+  expectClean(check("[guide][x]\n\n[x]:\n<b.md>\n", { "b.md": "# B\n" }), 2);
+});
+test("MULTI a next-line destination's anchor is checked against the target's headings", () => {
+  expectClean(
+    check("[guide][x]\n\n[x]:\n    b.md#part-one\n", {
+      "b.md": "# B\n\n## Part One\n",
+    }),
+    2,
+  );
+  expectBroken(
+    check("[guide][x]\n\n[x]:\n    b.md#nope\n", { "b.md": "# B\n" }),
+    1,
+    /a\.md:3: missing anchor b\.md#nope/,
+  );
+});
+test("MULTI a next-line destination inside a blockquote is checked", () => {
+  expectBroken(
+    check("[guide][x]\n\n> [x]:\n> missing.md\n"),
+    1,
+    /a\.md:3: missing file missing\.md/,
+  );
+});
+test("MULTI a definition in a fence or indented code is still not read", () => {
+  expectBroken(
+    check("[guide][x]\n\n```\n[x]:\n  missing.md\n```\n"),
+    1,
+    /undefined reference \[guide\]\[x\]/,
+  );
+  expectBroken(
+    check("[guide][x]\n\n    [x]:\n    missing.md\n"),
+    1,
+    /undefined reference \[guide\]\[x\]/,
+  );
+});

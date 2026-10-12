@@ -5,7 +5,7 @@
 //   node linkcheck.mjs <doc.md>...   (exit 1 on any broken link, 2 on a usage or read error)
 //
 // Link forms read: [t](dest), [t](dest "title"), [t](dest 'title'), [t](<dest with spaces>),
-// ![alt](src), and `[ref]: dest` definitions. Full [t][label] and collapsed [label][]
+// ![alt](src), and `[ref]: dest` definitions (the dest may start the next line). Full [t][label] and collapsed [label][]
 // reference usages must name a definition (labels match case-insensitively, whitespace
 // collapsed); a shortcut [label] is ordinary text unless a definition exists, and then the
 // definition's destination is what gets checked. A destination starting with `/` is
@@ -144,15 +144,33 @@ function anchors(file) {
 const LINK =
   /\]\(\s*(?:<([^>]*)>|((?:[^\s()]|\([^\s()]*\))*))(?:\s+(?:"[^"]*"|'[^']*'|\([^)]*\)))?\s*\)/g;
 
-// destinations on one line (code spans removed), in order
-function linkDests(line) {
-  const text = line.replace(/(`+)[\s\S]*?\1/g, (m) => " ".repeat(m.length));
+const noCode = (line) =>
+  line.replace(/(`+)[\s\S]*?\1/g, (m) => " ".repeat(m.length));
+
+// destinations on one line (code spans removed), in order. A `[label]:` definition with
+// nothing after it takes its destination from `next`, the following line (CommonMark
+// allows one line ending before the destination): inside the same blockquote, holding only
+// the destination and an optional title.
+function linkDests(line, next = "") {
+  const text = noCode(line);
   const out = [];
   const def =
-    /^(?:[ \t]*>)*[ \t]*(?:(?:[-*+]|\d+[.)])[ \t]+)?\[[^\]]+\]:\s*(?:<([^>]*)>|(\S+))/.exec(
+    /^((?:[ \t]*>)*)[ \t]*(?:(?:[-*+]|\d+[.)])[ \t]+)?\[([^\]]+)\]:[ \t]*(?:<([^>]*)>|(\S+))?/.exec(
       text,
     );
-  if (def) out.push(def[1] ?? def[2]);
+  if (def && (def[3] ?? def[4]) !== undefined) out.push(def[3] ?? def[4]);
+  else if (def && !def[2].startsWith("^")) {
+    const quotes = def[1].split(">").length - 1;
+    const rest = noCode(next).replace(
+      new RegExp(`^(?:[ \\t]*>){0,${quotes}}`),
+      "",
+    );
+    const dest =
+      /^[ \t]*(?:<([^>]*)>|([^\s>]\S*))(?:[ \t]+(?:"[^"]*"|'[^']*'|\([^)]*\)))?[ \t]*$/.exec(
+        rest,
+      );
+    if (dest) out.push(dest[1] ?? dest[2]);
+  }
   for (const m of text.matchAll(LINK)) out.push(m[1] ?? m[2]);
   return out;
 }
@@ -255,7 +273,7 @@ for (const f of files) {
   }
   const lines = [...outsideFences(text.split("\n"))];
   const defined = definedLabels(lines);
-  for (const [i, line] of lines) {
+  for (const [k, [i, line]] of lines.entries()) {
     for (const u of refUsages(line)) {
       checked++;
       if (!defined.has(normLabel(u.label))) {
@@ -263,7 +281,7 @@ for (const f of files) {
         console.log(`${f}:${i + 1}: undefined reference ${u.shown}`);
       }
     }
-    for (const href of linkDests(line)) {
+    for (const href of linkDests(line, lines[k + 1]?.[1])) {
       if (!href || isExternal(href)) continue;
       checked++;
       const why = check(f, href);

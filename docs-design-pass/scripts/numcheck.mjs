@@ -8,7 +8,9 @@
 //
 // A number keeps the unit that follows it, so a unit change reads as a changed number
 // (4 GHz -> 4 MHz, 20 °C -> 20 °F, 247 MB -> 247 GB). The unit is the run of letters,
-// `°`, `%`, `×` and a `/` between letters right after the number, with at most one space between them:
+// `°`, `%`, `×` and a `/` between letters right after the number, with at most one space between them,
+// each run of letters keeping its exponent (10 m² -> 10 m³, 5 s⁻¹, 10 m^2); a superscript
+// attached to the number is its unit too (10² -> 10³):
 //   - attached ("8.3s", "12x", "5%", "3×", "20°"): always a unit.
 //   - after a space: any word is the unit ("12 V", "247 GB", "10 milliseconds",
 //     "3 sources"), except a function word ("10 to 20", "5 or 6", "3 of the apps"; a lone
@@ -109,8 +111,11 @@ const SPACE = "[ \\t\\u00a0\\u202f]";
 // "x-5" are not tokens of their own.
 const NUMBER =
   /(?<n>(?:(?<![\p{L}\p{N}])[−-])?(?:\d(?:[\d,]*\d)?(?:\.\d+)?|(?<![\p{L}\p{N}.])\.\d+)(?:[eE][+−-]?\d+)?)/gu;
+// an exponent on a unit: superscript (m², s⁻¹) or caret (m^2, s^-1)
+const SUPERSCRIPT = "[⁺⁻]?[⁰¹²³⁴⁵⁶⁷⁸⁹]+";
+const EXPONENT = `(?:${SUPERSCRIPT}|\\^[+−-]?\\d+)`;
 const TAIL = new RegExp(
-  `^(?<sp>${SPACE}?)(?<hy>-?)(?<tok>[\\p{L}°%×]+(?:/\\p{L}+)*)(?![\\p{L}\\p{N}°%×])`,
+  `^(?<sp>${SPACE}?)(?<hy>-?)(?<tok>[\\p{L}°%×]+${EXPONENT}?(?:/\\p{L}+${EXPONENT}?)*|${SUPERSCRIPT})(?![\\p{L}\\p{N}°%×])`,
   "u",
 );
 const hasLetter = /\p{L}/u;

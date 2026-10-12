@@ -113,9 +113,10 @@ its markers fails the generator.
   any added number and lists removed ones; each removal must be a repeat the
   owning doc still states, and each addition (e.g. a renamed `12x` → `12×`, or a
   number moved in from its owning doc) is listed with its source field. A number
-  keeps the word after it as its unit (function words aside), so a reworded unit
-  word (`10 milliseconds` → `10 ms`, `12 apps` → `12 applications`) reads as a
-  changed number and is justified like any other addition.
+  keeps the word after it, with any exponent (`m²`, `s⁻¹`), as its unit
+  (function words aside), so a reworded unit word (`10 milliseconds` → `10 ms`,
+  `12 apps` → `12 applications`) reads as a changed number and is justified like
+  any other addition.
 - The link check (linkcheck) runs on every doc, with GitHub's slug rules.
 - Cut stacked parentheticals, em dashes as a general connector, the same caveat
   in three places, captions that restate numbers, and findings retold in

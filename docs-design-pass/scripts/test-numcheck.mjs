@@ -422,3 +422,31 @@ test("LONG a reworded word after a number reads as a changed number (12 apps -> 
 test("LONG a function word after a number is still not a unit (3 of the apps)", () => {
   assert.equal(edit("3 of the apps\n", "3 of the apps, reworded\n").status, 0);
 });
+
+// ---- review: superscript and caret exponents belong to the unit -----------------------------
+
+for (const [a, b, added] of [
+  ["10 m²", "10 m³", "10m³"],
+  ["5 s⁻¹", "5 s⁻²", "5s⁻²"],
+  ["4 m/s²", "4 m/s³", "4m/s³"],
+  ["10m²", "10m³", "10m³"],
+  ["10 m^2", "10 m^3", "10m\\^3"],
+  ["5 s^-1", "5 s^-2", "5s\\^-2"],
+  ["10²", "10³", "10³"],
+]) {
+  test(`SUP "${a}" -> "${b}" is an added number`, () => {
+    const r = edit(`an area of ${a} here\n`, `an area of ${b} here\n`);
+    assert.equal(r.status, 1, r.stdout + r.stderr);
+    assert.match(r.stdout, new RegExp(`ADDED ${added}(\\s|$)`));
+  });
+}
+test("SUP an unchanged 10 m² and 5 s⁻¹ are unchanged", () => {
+  const r = edit("10 m² at 5 s⁻¹\n", "at 5 s⁻¹, 10 m²\n");
+  assert.equal(r.status, 0, r.stdout + r.stderr);
+  assert.match(r.stdout, /unchanged numbers/);
+});
+test("SUP an exponent is part of the unit: 10 m² -> 10 m is a change", () => {
+  const r = edit("10 m² here\n", "10 m here\n");
+  assert.equal(r.status, 1, r.stdout + r.stderr);
+  assert.match(r.stdout, /ADDED 10m(\s|$)/);
+});

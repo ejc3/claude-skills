@@ -1844,8 +1844,9 @@ export function auditSvg(
   // page), rects that frame text (a container or a heat-table cell: the anchor of a text
   // painted in that theme lies inside it; the text is measured against it instead),
   // labeled swatches (a legend key), stripes ≤3px, hairlines drawn in the grid colour
-  // (gridlines and rules are decoration; the axis labels carry the values), and a fill
-  // that composites to exactly the colour under it (a hollow dot's centre). A translucent
+  // (gridlines and rules are decoration; the axis labels carry the values), and, where the
+  // same shape's stroke paints and is itself audited as a mark, the parts of its fill that
+  // composite to exactly the colour under them (a hollow dot's centre). A translucent
   // colour is composited over each backdrop before the 3:1 check.
   const anchors = Object.fromEntries(
     THEMES.map((theme) => [
@@ -1876,18 +1877,23 @@ export function auditSvg(
         x >= x1 && x <= x1 + 12 && base >= y0 - 4 && base <= y1 + 4,
     );
   };
+  // is a channel of a shape audited as a mark in a theme: it paints and no exemption applies
+  const audited = (e, ch, theme) => {
+    if (!reachBox(e, ch, theme)) return false; // paints nothing
+    if (e.tag === "rect") {
+      const g = geom(e);
+      if (ch === "fill" && isCanvas(e)) return false;
+      if (!(g.w > 3 && g.h > 3)) return false;
+      if (framesText(e, theme) || isLabeledSwatch(e, theme)) return false;
+    }
+    return !(ch === "stroke" && isGridHairline(e));
+  };
   for (const e of shapes)
     for (const ch of SHAPES.get(e.tag))
       for (const theme of THEMES) {
+        if (!audited(e, ch, theme)) continue;
         const g = geom(e);
         const box = reachBox(e, ch, theme);
-        if (!box) continue; // paints nothing
-        if (e.tag === "rect") {
-          if (ch === "fill" && isCanvas(e)) continue;
-          if (!(g.w > 3 && g.h > 3)) continue;
-          if (framesText(e, theme) || isLabeledSwatch(e, theme)) continue;
-        }
-        if (ch === "stroke" && isGridHairline(e)) continue;
         const region = { box, meets: (b) => channelMeets(e, ch, b, theme) };
         const other = otherFills[theme].find(
           (o) =>
@@ -1920,10 +1926,16 @@ export function auditSvg(
           continue;
         }
         const p = paintOf(e, ch, theme);
+        // a fill the colour of its backdrop is a hollow mark's centre only when the
+        // shape's own stroke carries the mark
+        const hollow =
+          ch === "fill" &&
+          SHAPES.get(e.tag).includes("stroke") &&
+          audited(e, "stroke", theme);
         let worst = Infinity;
         for (const bg of bgs) {
           const c = contrast(over(p.color, bg), bg);
-          if (!(ch === "fill" && c === 1)) worst = Math.min(worst, c);
+          if (!(hollow && c === 1)) worst = Math.min(worst, c);
         }
         if (worst < 3) {
           const alpha =

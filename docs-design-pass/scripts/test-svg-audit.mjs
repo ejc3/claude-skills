@@ -1780,3 +1780,36 @@ test("C4-15 names that are object properties are unsupported, not crashes or pas
     /^unsupported fill="constructor" on <rect>/,
   );
 });
+
+// ---- review: a fill equal to its backdrop is exempt only as a hollow mark's centre -------------
+
+test("HOLLOW an opaque page-coloured bar with no stroke is flagged at 1:1 in both themes", () => {
+  const bar = `<rect x="20" y="20" width="40" height="40" fill="#ffffff"/>`;
+  const out = marks(bar);
+  has(out, /^light: rect fill #ffffff at 1\.00:1 \(marks need 3:1\)/);
+  has(out, /^dark: rect fill #0d1117 at 1\.00:1 \(marks need 3:1\)/);
+  expectExit(cli(chartFile("hollow-bar.svg", svg({ body: bar }))), 1, /FAIL/);
+});
+test("HOLLOW a page-coloured fill whose stroke paints nothing is flagged", () => {
+  for (const stroke of [
+    `stroke="none"`,
+    `stroke="#1c2330" stroke-width="0"`,
+    `stroke="#1c233000"`,
+  ])
+    has(
+      marks(`<circle cx="50" cy="50" r="10" fill="#ffffff" ${stroke}/>`),
+      /^light: circle fill #ffffff at 1\.00:1/,
+    );
+});
+test("HOLLOW a page-coloured fill whose stroke is a grid hairline is flagged", () => {
+  has(
+    marks(`<path d="M10 10L60 10L60 60Z" fill="#ffffff" stroke="#e4e8ec"/>`),
+    /^light: path fill #ffffff at 1\.00:1/,
+  );
+});
+test("HOLLOW a hollow dot (page-coloured fill, dark stroke) still passes in both themes", () => {
+  const style = `@media (prefers-color-scheme: dark){rect[fill="#ffffff"]{fill:#0d1117}circle[fill="#ffffff"]{fill:#0d1117}circle[stroke="#1c2330"]{stroke:#e2e7ec}}`;
+  const dot = `<circle cx="50" cy="50" r="6" fill="#ffffff" stroke="#1c2330" stroke-width="2"/>`;
+  assert.deepEqual(marks(dot, undefined, { style }), []);
+  expectExit(cli(chartFile("hollow-dot.svg", svg({ style, body: dot }))), 0);
+});
