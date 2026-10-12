@@ -134,9 +134,10 @@ for (const [a, b] of [
     assert.equal(r.status, 0, r.stdout + r.stderr);
   });
 }
-test("F7 a following word is not a unit (3 sources / 3 services)", () => {
+test("F7 a following word is the number's unit: 3 sources -> 3 services is a change", () => {
   const r = edit("3 sources and 5 hours\n", "3 services and 5 hours\n");
-  assert.equal(r.status, 0, r.stdout + r.stderr);
+  assert.equal(r.status, 1, r.stdout + r.stderr);
+  assert.match(r.stdout, /ADDED 3services/);
 });
 test("F7 a space-separated unit change is listed as removed and added", () => {
   const r = edit("took 247 MB\n", "took 247 GB\n");
@@ -178,8 +179,6 @@ for (const [a, b] of [
   ["5 days", "5-day"],
   ["10 to 20 cores", "10 to 20 cores, reworded"],
   ["5 or 6 of them", "5 or 6 of those"],
-  ["3 sources", "3 findings"],
-  ["see 4 More", "see 4 Other"],
 ]) {
   test(`unit "${a}" and "${b}" read as the same number`, () => {
     const r = edit(`it ran ${a} here\n`, `it ran ${b} here\n`);
@@ -194,7 +193,7 @@ test("a slash after a unit is a separator: 4.5s/2.2s = 4.5s / 2.2s, 90 MB/s = 90
 test("a hyphen attaches only a count noun (10-20 and 5-minute)", () => {
   assert.equal(edit("10-20 times\n", "10 and 20 times\n").status, 0);
   assert.equal(edit("a 5 minute wait\n", "a 5-minute wait\n").status, 0);
-  assert.equal(edit("a 5-fold gain\n", "a 5 gain\n").status, 0);
+  assert.equal(edit("a 5-fold gain\n", "a gain of 5.\n").status, 0);
 });
 test("a spaced symbol alone is not a unit (10 / 20, 5 x 3)", () => {
   assert.equal(edit("10 / 20\n", "10/20\n").status, 0);
@@ -284,7 +283,7 @@ test("F8 an absolute path works from any directory", () => {
 // ---- number tokens ----------------------------------------------------------------------------------------------
 
 test("a range reads as two numbers, not a number and a negative (10-20)", () => {
-  const r = edit("took 20 and 10 times\n", "took 10-20 times\n");
+  const r = edit("took from 10 to 20 times\n", "took 10-20 times\n");
   assert.equal(r.status, 0, r.stdout + r.stderr);
   assert.match(r.stdout, /unchanged numbers/);
 });
@@ -385,4 +384,41 @@ test("DOT a version v1.2.3 does not yield a .3 token and is unchanged", () => {
   const r = edit("use v1.2.3 now\n", "use v1.2.3 and v1.2.4 now\n");
   assert.equal(r.status, 1);
   assert.doesNotMatch(r.stdout, /ADDED[^\n]*\.[34]\b(?!\.)/);
+});
+
+// ---- review: exponent signs and long-form unit words ------------------------------------------
+
+for (const [a, b, added] of [
+  ["1e-6", "1e+6", "1e\\+6"],
+  ["1e+6", "1e6", "1e6"],
+  ["1e6", "1e-6", "1e-6"],
+  ["2.5E-3", "2.5E+3", "2\\.5E\\+3"],
+]) {
+  test(`EXP "${a}" -> "${b}" reads as a changed number`, () => {
+    const r = edit(`a tolerance of ${a}.\n`, `a tolerance of ${b}.\n`);
+    assert.equal(r.status, 1, r.stdout + r.stderr);
+    assert.match(r.stdout, new RegExp(`ADDED ${added}(\\s|$)`));
+  });
+}
+test("EXP a letter e with no digits after it is still the number's unit", () => {
+  assert.equal(
+    edit("step 1e of the plan\n", "step 1e of the plan, reworded\n").status,
+    0,
+  );
+  const r = edit("step 1e of the plan\n", "step 1f of the plan\n");
+  assert.equal(r.status, 1, r.stdout + r.stderr);
+  assert.match(r.stdout, /ADDED 1f/);
+});
+test("LONG a spaced unit word longer than 3 letters is kept: 10 milliseconds -> 10 microseconds", () => {
+  const r = edit("it took 10 milliseconds\n", "it took 10 microseconds\n");
+  assert.equal(r.status, 1, r.stdout + r.stderr);
+  assert.match(r.stdout, /ADDED 10microseconds/);
+});
+test("LONG a reworded word after a number reads as a changed number (12 apps -> 12 applications)", () => {
+  const r = edit("across 12 apps\n", "across 12 applications\n");
+  assert.equal(r.status, 1, r.stdout + r.stderr);
+  assert.match(r.stdout, /ADDED 12applications/);
+});
+test("LONG a function word after a number is still not a unit (3 of the apps)", () => {
+  assert.equal(edit("3 of the apps\n", "3 of the apps, reworded\n").status, 0);
 });

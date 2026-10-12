@@ -10,19 +10,16 @@
 // (4 GHz -> 4 MHz, 20 °C -> 20 °F, 247 MB -> 247 GB). The unit is the run of letters,
 // `°`, `%`, `×` and a `/` between letters right after the number, with at most one space between them:
 //   - attached ("8.3s", "12x", "5%", "3×", "20°"): always a unit.
-//   - after a space: a unit only if it cannot be an ordinary word: a known unit (KNOWN
-//     below), a token containing `°` or `/` with a letter ("°C", "req/s", "MB/s"), or an
-//     acronym-shaped token (an upper-case letter after the first: "GHz", "kHz", "MiB",
-//     "GB", "CPUs"). A longer word is not a unit ("3 sources"), nor is a function word
-//     ("10 to 20", "5 or 6").
+//   - after a space: any word is the unit ("12 V", "247 GB", "10 milliseconds",
+//     "3 sources"), except a function word ("10 to 20", "5 or 6", "3 of the apps"; a lone
+//     capital letter is never one: "12 A" is amperes). The tool cannot tell a unit it does
+//     not list from an ordinary word, and a changed unit must not pass, so rewording the
+//     word after a number reads as a changed number: the editor justifies it.
 //     `%` and `×` need no space, so "5 %" is not "5%".
-//     A token of up to 3 letters that is not on FUNCTION_WORDS is also a unit ("12 V",
-//     "4 kg"): the tool cannot tell it from a unit it does not list, and a changed
-//     unit must not pass. A lone capital letter is never a function word ("12 A" is amperes).
-//   - count nouns ("files", "lines", "tasks", "apps", "cores", "days", ...) are known
-//     units, because a changed count noun is a change ("5 files" -> "5 lines"). They match
-//     singular or plural and with a hyphen ("64 cores" = "64-core"); an unlisted plural
-//     noun ("3 sources") stays a word.
+//   - count nouns (COUNT_NOUNS below: "files", "tasks", "apps", "cores", "days", ...)
+//     match singular or plural and with a hyphen ("64 cores" = "64-core"); any other
+//     word after a hyphen is not a unit ("5-fold" is 5).
+// A number may carry an exponent with its sign: 1e-6, 1e+6 and 1e6 are three numbers.
 // "3x4" and "5/10" are numbers without units. A minus sign counts only when no letter or
 // digit precedes it ("10-20" is 10 and 20). Trailing punctuation is dropped, so moving a
 // comma or a period does not read as a new number.
@@ -105,11 +102,13 @@ const FUNCTION_WORDS = new Set([
   ),
 ]);
 const SPACE = "[ \\t\\u00a0\\u202f]";
-// an optional sign, then digits with an optional fraction, or a leading-dot decimal (.5).
-// The sign and a bare leading dot both need a non-alphanumeric left neighbour, so the
-// ".3" of "v1.2.3" and the "-" of "x-5" are not tokens of their own.
+// an optional sign, then digits with an optional fraction, or a leading-dot decimal (.5),
+// then an optional exponent with its sign (1e-6, 1e+6 and 1e6 are three numbers; an "e"
+// with no digits after it is left to the unit, "1e"). The sign and a bare leading dot
+// both need a non-alphanumeric left neighbour, so the ".3" of "v1.2.3" and the "-" of
+// "x-5" are not tokens of their own.
 const NUMBER =
-  /(?<n>(?:(?<![\p{L}\p{N}])[−-])?(?:\d(?:[\d,]*\d)?(?:\.\d+)?|(?<![\p{L}\p{N}.])\.\d+))/gu;
+  /(?<n>(?:(?<![\p{L}\p{N}])[−-])?(?:\d(?:[\d,]*\d)?(?:\.\d+)?|(?<![\p{L}\p{N}.])\.\d+)(?:[eE][+−-]?\d+)?)/gu;
 const TAIL = new RegExp(
   `^(?<sp>${SPACE}?)(?<hy>-?)(?<tok>[\\p{L}°%×]+(?:/\\p{L}+)*)(?![\\p{L}\\p{N}°%×])`,
   "u",
@@ -129,16 +128,13 @@ const unitAt = (rest) => {
   if (WORD_UNITS.includes(tok)) return tok;
   if (!hasLetter.test(tok)) return "";
   if (/[°/]/.test(tok) || acronym.test(tok)) return tok;
-  // anything else of up to 3 letters ("12 V", "4 kg") is a unit this tool does not know;
-  // reading it as one fails closed, where reading it as a word would pass a changed unit.
-  // Letters are counted as code points, so "𝑘𝑔" (outside the BMP) is two, not four.
-  const letters = [...tok].length;
-  if (
-    letters <= 3 &&
-    !FUNCTION_WORDS.has(letters > 1 ? tok.toLowerCase() : tok)
-  )
-    return tok;
-  return "";
+  // any other word is kept as the unit ("12 V", "10 milliseconds"), unless it is a
+  // function word ("3 of the apps"): the tool cannot tell an unlisted unit from a word, and
+  // a changed unit must not pass, so a reworded word after a number reads as a changed
+  // number. A lone capital letter is never a function word ("12 A" is amperes).
+  if (FUNCTION_WORDS.has([...tok].length > 1 ? tok.toLowerCase() : tok))
+    return "";
+  return tok;
 };
 const nums = (s) =>
   [...s.matchAll(NUMBER)].map(

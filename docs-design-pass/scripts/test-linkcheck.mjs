@@ -362,3 +362,34 @@ test("REF a definition inside a blockquote or list item counts", () => {
     4,
   );
 });
+
+// ---- indented code is not a definition ----------------------------------------------------------
+
+test("CODE a definition in an indented code block does not define the label", () => {
+  expectBroken(
+    check("text\n\n    [x]: b.md\n\nsee [link][x]\n", { "b.md": "# B\n" }),
+    1,
+    /undefined reference \[link\]\[x\]/,
+  );
+  expectBroken(
+    check("\t[x]: b.md\n\nsee [link][x]\n", { "b.md": "# B\n" }),
+    1,
+    /undefined reference \[link\]\[x\]/,
+  );
+});
+test("CODE a definition indented 1-3 spaces still counts", () => {
+  expectClean(check("see [link][x]\n\n   [x]: b.md\n", { "b.md": "# B\n" }), 2);
+});
+test("CODE a 4-space line that continues a paragraph is not code", () => {
+  expectClean(
+    check("see [link][x]\n\n[y]: b.md\n    [x]: b.md\n", { "b.md": "# B\n" }),
+    3,
+  );
+});
+test("CODE lists are not tracked: a list item's indented continuation reads as code (conservative)", () => {
+  expectBroken(
+    check("- item\n\n    [x]: b.md\n\nsee [link][x]\n", { "b.md": "# B\n" }),
+    1,
+    /undefined reference \[link\]\[x\]/,
+  );
+});

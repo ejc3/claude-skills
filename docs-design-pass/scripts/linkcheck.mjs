@@ -61,12 +61,30 @@ function headingText(raw) {
 }
 
 // Every line as [index, text], with a fenced block (``` or ~~~, closed by the same
-// character at least as long) and its delimiter lines blank, so line numbers survive.
+// character at least as long) and its delimiter lines blank, so line numbers survive; an
+// indented code block (lines indented 4 spaces or a tab, starting at the top of the file
+// or after a blank line) is blanked too. Lists are not tracked: a list item's indented
+// continuation after a blank line reads as code, so a definition there does not count
+// and a link there is not checked.
 function* outsideFences(lines) {
   let close = null;
+  let code = false;
+  let afterBlank = true;
   for (const [i, line] of lines.entries()) {
     if (close) {
       if (close.test(line)) close = null;
+      yield [i, ""];
+      afterBlank = false;
+      continue;
+    }
+    if (!line.trim()) {
+      afterBlank = true;
+      yield [i, line];
+      continue;
+    }
+    code = /^(?: {4}|\t| {1,3}\t)/.test(line) && (code || afterBlank);
+    afterBlank = false;
+    if (code) {
       yield [i, ""];
       continue;
     }
