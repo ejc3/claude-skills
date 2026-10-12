@@ -130,10 +130,12 @@ const unitAt = (rest) => {
   if (!hasLetter.test(tok)) return "";
   if (/[°/]/.test(tok) || acronym.test(tok)) return tok;
   // anything else of up to 3 letters ("12 V", "4 kg") is a unit this tool does not know;
-  // reading it as one fails closed, where reading it as a word would pass a changed unit
+  // reading it as one fails closed, where reading it as a word would pass a changed unit.
+  // Letters are counted as code points, so "𝑘𝑔" (outside the BMP) is two, not four.
+  const letters = [...tok].length;
   if (
-    tok.length <= 3 &&
-    !FUNCTION_WORDS.has(tok.length > 1 ? tok.toLowerCase() : tok)
+    letters <= 3 &&
+    !FUNCTION_WORDS.has(letters > 1 ? tok.toLowerCase() : tok)
   )
     return tok;
   return "";

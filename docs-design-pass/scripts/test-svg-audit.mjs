@@ -306,13 +306,14 @@ test("F4 a dark rule on the <g> recolours an inheriting text", () => {
   const body = `<g fill="#1c2330"><text x="10" y="20" font-size="12">ink</text></g>`;
   assert.deepEqual(issuesOf(svg({ style, body })), []);
 });
-test("F4 <tspan> text is audited for size and contrast", () => {
+test("F4 <tspan> runs are outside the subset: reported, never passed", () => {
   const body =
     `<text x="10" y="20" font-size="12" fill="#1c2330">label ` +
     `<tspan fill="#cccccc">pale</tspan><tspan font-size="7">tiny</tspan></text>`;
-  const out = issuesOf(svg({ body }));
-  has(out, /^light: "pale" #cccccc/);
-  has(out, /"tiny" is 7px/);
+  has(
+    issuesOf(svg({ body })),
+    /^unsupported <tspan>: the audit cannot verify it/,
+  );
 });
 test("F4 text without a fill is black in both themes, so it fails on the dark page", () => {
   const out = issuesOf(svg({ body: text("bare", "") }));
@@ -1124,4 +1125,188 @@ test("PG3 per-theme recolours still apply to each canvas layer", () => {
   );
   has(out, /^light: rect fill #dddddd at 1\.\d\d:1/);
   assert.ok(!out.some((i) => /^dark:/.test(i)), String(out));
+});
+
+// ---- the supported subset: one paint stack, unsupported constructs are issues -------------------
+
+const WHITE = CANVAS("#ffffff");
+const FULL_BLACK = CANVAS("#000000");
+const plainSvg = (body, bg = WHITE) => svg({ style: "", bg, body });
+const unsupported = (body, re) => has(issuesOf(plainSvg(body)), re);
+
+test("S1 opacity on a <g> over two painted elements is unsupported", () => {
+  const body = `<g opacity="0.5">${FULL_BLACK}${FULL_BLACK}</g>${text("x", `fill="#ffffff"`)}`;
+  has(
+    issuesOf(plainSvg(body)),
+    /^unsupported opacity on <g> over 2 painted elements/,
+  );
+});
+test("S1 opacity on a <g> over one painted element is modelled: white text on the gray composite", () => {
+  const body = `<g opacity="0.5">${FULL_BLACK}</g>${text("x", `fill="#ffffff"`)}`;
+  const out = issuesOf(plainSvg(body));
+  has(out, /^light: "x" #ffffff at 3\.98:1 \(needs 4\.5:1\)/);
+  assert.ok(!out.some((i) => /unsupported/.test(i)), JSON.stringify(out));
+});
+
+const CANVAS_STROKE = (stroke) =>
+  `<rect width="200" height="100" fill="none" stroke="${stroke}" stroke-width="8"/>`;
+test("S2 a canvas-sized stroke-only rect is mark-checked on its stroke", () => {
+  has(
+    issuesOf(svg({ style: "", bg: CANVAS_STROKE("#dddddd") })),
+    /^light: rect stroke #dddddd at 1\.\d\d:1 \(marks need 3:1\)/,
+  );
+});
+test("S2 a canvas-sized rect with a url() stroke is an unreadable paint", () => {
+  const out = issuesOf(svg({ style: "", bg: CANVAS_STROKE("url(#g)") }));
+  has(
+    out,
+    /^light: rect stroke has a colour the audit cannot read \(url\(#g\)\)/,
+  );
+  has(
+    out,
+    /^dark: rect stroke has a colour the audit cannot read \(url\(#g\)\)/,
+  );
+});
+
+test("S3 an element with zero effective alpha drawn after the text does not cover it", () => {
+  const ink = text("x", `fill="#000000"`, 10, 30);
+  for (const cover of [
+    BOX("black", ` opacity="0"`),
+    BOX("black", ` fill-opacity="0"`),
+    BOX("rgba(0,0,0,0)"),
+    `<rect width="200" height="100" fill="#000000" opacity="0"/>`,
+  ])
+    assert.deepEqual(issuesOf(plainSvg(ink + cover)), [], cover);
+});
+
+test("S4 one paint stack: a full-canvas rect drawn over a local rect hides it", () => {
+  const body = `${BOX("#000000")}${WHITE}${text("x", `fill="#ffffff"`, 10, 30)}`;
+  has(issuesOf(plainSvg(body)), /^light: "x" #ffffff at 1\.00:1/);
+  const dark = `${BOX("#000000")}${WHITE}${text("x", `fill="#000000"`, 10, 30)}`;
+  assert.deepEqual(issuesOf(plainSvg(dark)), []);
+});
+
+test("S6 a black path drawn after black text and over it covers it", () => {
+  const body = `${text("x", `fill="#000000"`, 10, 30)}<path d="M5 15L120 15L120 40L5 40z" fill="#000000"/>`;
+  has(
+    issuesOf(plainSvg(body)),
+    /^light: "x" is covered by a path drawn after it/,
+  );
+});
+test("S6 a scale() transform is unsupported, not a 1.2px text read as 12px", () => {
+  unsupported(
+    `<g transform="scale(0.1)">${text("t", `fill="#000000"`)}</g>`,
+    /^unsupported transform scale\(0\.1\) on <g>/,
+  );
+});
+test("S6 a rotate() transform is unsupported", () => {
+  unsupported(
+    `<text x="10" y="20" font-size="12" fill="#000000" transform="rotate(-90 10 20)">t</text>`,
+    /^unsupported transform rotate\(-90 10 20\) on <text>/,
+  );
+});
+test("S6 <use> is unsupported", () => {
+  unsupported(
+    `<defs><rect id="r" width="10" height="10"/></defs><use href="#r" x="20" y="20"/>`,
+    /^unsupported <use>/,
+  );
+});
+test("S6 <image> is unsupported", () => {
+  unsupported(
+    `<image href="x.png" width="20" height="20"/>`,
+    /^unsupported <image>/,
+  );
+});
+test("S6 <clipPath> and clip-path are unsupported", () => {
+  const out = issuesOf(
+    plainSvg(
+      `<clipPath id="c"><rect width="10" height="10"/></clipPath><rect x="5" y="5" width="40" height="40" fill="#000000" clip-path="url(#c)"/>`,
+    ),
+  );
+  has(out, /^unsupported <clipPath>/);
+  has(out, /^unsupported clip-path on <rect>/);
+});
+test("S6 a mask is unsupported", () => {
+  unsupported(
+    `<defs><mask id="m"><rect width="10" height="10" fill="#ffffff"/></mask></defs><rect x="5" y="5" width="40" height="40" fill="#000000" mask="url(#m)"/>`,
+    /^unsupported mask on <rect>/,
+  );
+});
+test("S6 a filter is unsupported", () => {
+  unsupported(
+    `<defs><filter id="f"/></defs>${text("t", `fill="#000000" filter="url(#f)"`)}`,
+    /^unsupported filter on <text>/,
+  );
+});
+test("S6 <tspan> is unsupported", () => {
+  unsupported(
+    `<text x="10" y="20" font-size="12" fill="#000000">a <tspan dy="4">b</tspan></text>`,
+    /^unsupported <tspan>/,
+  );
+});
+test("S6 a curve command in a path is unsupported", () => {
+  unsupported(
+    `<path d="M0 0C10 10 20 20 30 30" stroke="#000000" fill="none"/>`,
+    /^unsupported path command C on <path>/,
+  );
+});
+test("S6 text dx is unsupported", () => {
+  unsupported(text("t", `fill="#000000" dx="4"`), /^unsupported dx on <text>/);
+});
+
+// a fixture in the consumer charts' style: translate groups, an href wrapper, rgba cell
+// fills, M/L/z arrowheads drawn after their labels without overlapping them, a style block
+// of dark recolours
+const CONSUMER = `<svg xmlns="http://www.w3.org/2000/svg" width="420" height="200" viewBox="0 0 420 200" role="img" aria-label="fixture" font-family="system-ui,-apple-system,Segoe UI,Helvetica,Arial,sans-serif" style="font-variant-numeric:tabular-nums">
+<style>@media (prefers-color-scheme: dark){
+rect[fill="#ffffff"]{fill:#0d1117}
+text[fill="#1c2330"]{fill:#e2e7ec}
+text[fill="#6b7885"]{fill:#9aa6b1}
+line[stroke="#e4e8ec"]{stroke:#2b333c}
+line[stroke="#8794a1"],path[stroke="#8794a1"]{stroke:#6f7c88}
+path[fill="#8794a1"]{fill:#6f7c88}
+rect[fill="#f3f6fb"]{fill:#172435}rect[stroke="#c5d4ea"]{stroke:#34507a}
+rect[fill="#fcf4f0"]{fill:#2b1b15}rect[stroke="#e2c0b0"]{stroke:#6c4232}
+circle[fill="#3a4656"]{fill:#a7b6c8}
+}</style>
+<rect width="420" height="200" fill="#ffffff"/>
+<g transform="translate(4 0)">
+<text x="16" y="24" font-size="17" fill="#1c2330" font-weight="650">A figure title</text>
+<text x="16" y="42" font-size="12" fill="#6b7885">a subtitle line</text>
+<rect x="16" y="62" width="150" height="50" rx="6" fill="#fcf4f0" stroke="#e2c0b0" stroke-width="1"/>
+<text x="27" y="80" font-size="12" fill="#1c2330" font-weight="600">the seed</text>
+<text x="27" y="96" font-size="11" fill="#1c2330">computes every task</text>
+<line x1="166" y1="87" x2="214" y2="87" stroke="#8794a1" stroke-width="1.25"/>
+<text x="190" y="80" font-size="11" fill="#6b7885" text-anchor="middle">upload</text>
+<path d="M222 87L215.5 90L215.5 84z" fill="#8794a1"/>
+<rect x="222" y="62" width="150" height="50" rx="6" fill="#f3f6fb" stroke="#c5d4ea" stroke-width="1"/>
+<text x="233" y="80" font-size="12" fill="#1c2330" font-weight="600">the cache</text>
+<rect x="16" y="126" width="80" height="24" rx="3" fill="rgba(31,138,77,0.16)"/>
+<text x="56" y="142" font-size="12" fill="#1c2330" text-anchor="middle">1.5s</text>
+<rect x="100" y="126" width="80" height="24" rx="3" fill="rgba(200,120,40,0.22)"/>
+<text x="140" y="142" font-size="12" fill="#1c2330" text-anchor="middle">×6.6</text>
+<line x1="16" y1="160" x2="372" y2="160" stroke="#e4e8ec"/>
+<circle cx="20" cy="172" r="4" fill="#3a4656"/>
+<text x="30" y="176" font-size="11" fill="#1c2330">a legend entry</text>
+</g>
+<a href="../../bench/example.json">
+<text x="20" y="192" font-size="10" fill="#6b7885">source: bench/example.json</text>
+</a>
+</svg>`;
+test("S8 a fixture in the consumer charts' style has no issues and no notes", () => {
+  const out = audit(CONSUMER);
+  assert.deepEqual([...out], []);
+  assert.deepEqual(out.notes, []);
+});
+
+test("S9 text over part of a rect is checked against both sides of its edge", () => {
+  // white text starting on a black rect and running past its right edge onto white
+  const body = `<rect x="5" y="5" width="30" height="40" fill="#000000"/>${text("long label", `fill="#ffffff"`, 10, 30)}`;
+  has(issuesOf(plainSvg(body)), /^light: "long label" #ffffff at 1\.00:1/);
+});
+test("S9 a grid hairline under a text is decoration; a darker line under it is a backdrop", () => {
+  const under = (stroke) =>
+    `<line x1="30" y1="0" x2="30" y2="100" stroke="${stroke}"/>${text("label", `fill="#6b7885"`, 10, 30)}`;
+  assert.deepEqual(issuesOf(plainSvg(under("#e4e8ec"))), []);
+  has(issuesOf(plainSvg(under("#8794a1"))), /^light: "label" #6b7885 at/);
 });

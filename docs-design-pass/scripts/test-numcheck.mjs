@@ -207,6 +207,8 @@ for (const [a, b, added] of [
   ["12 V", "12 A", "12A"],
   ["4 kg", "4 lb", "4lb"],
   ["9 Pa", "9 psi", "9psi"],
+  // letters outside the BMP: the 3-letter limit counts code points, not UTF-16 units
+  ["4 𝑘𝑔", "4 𝑙𝑏", "4𝑙𝑏"],
 ]) {
   test(`short unit "${a}" -> "${b}" is an added number`, () => {
     const r = edit(`it drew ${a} here\n`, `it drew ${b} here\n`);
