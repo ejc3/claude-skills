@@ -201,6 +201,26 @@ test("a spaced symbol alone is not a unit (10 / 20, 5 x 3)", () => {
   assert.equal(edit("5 x 3\n", "5 x 3\n").status, 0);
 });
 
+// ---- a short spaced token is the number's unit unless it is a function word --------------------------------------
+
+for (const [a, b, added] of [
+  ["12 V", "12 A", "12A"],
+  ["4 kg", "4 lb", "4lb"],
+  ["9 Pa", "9 psi", "9psi"],
+]) {
+  test(`short unit "${a}" -> "${b}" is an added number`, () => {
+    const r = edit(`it drew ${a} here\n`, `it drew ${b} here\n`);
+    assert.equal(r.status, 1, r.stdout + r.stderr);
+    assert.match(r.stdout, new RegExp(`ADDED .*${added}`));
+  });
+}
+test("a function word after a number is not a unit (3 of the apps, 5 in total)", () => {
+  assert.equal(edit("3 of the apps\n", "3 of the apps\n").status, 0);
+  assert.equal(edit("3 of the apps\n", "3 in the apps\n").status, 0);
+  assert.equal(edit("5 in total\n", "5 at once\n").status, 0);
+  assert.equal(edit("2 The end\n", "2 and end\n").status, 0);
+});
+
 // ---- finding 8: only a missing path means a new file -------------------------------------------------------------
 
 test("F8 a bad base ref exits 2 with git's error, not 'every number is new'", () => {

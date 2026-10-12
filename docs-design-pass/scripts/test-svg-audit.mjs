@@ -1010,3 +1010,118 @@ test("BG a canvas rect filled in light and none in dark leaves the dark default 
     JSON.stringify(out.notes),
   );
 });
+
+// ---- what the audit cannot read or order is an issue, never a pass --------------------------
+
+const CANVAS = (fill) => `<rect width="200" height="100" fill="${fill}"/>`;
+
+test("PG1 a full-canvas background with an unreadable paint is an issue in each theme", () => {
+  const out = issuesOf(
+    svg({
+      style: "",
+      bg: CANVAS("url(#g)"),
+      body: text("x", `fill="#000000"`),
+    }),
+  );
+  has(out, /^light: .*full-canvas rect.*url\(#g\)/);
+  has(out, /^dark: .*full-canvas rect.*url\(#g\)/);
+});
+test("PG1 a dark rule that makes the background unreadable is an issue in dark only", () => {
+  const style = `@media (prefers-color-scheme: dark){rect[fill="#ffffff"]{fill:url(#g)}}`;
+  const out = issuesOf(svg({ style, body: text("x", `fill="#000000"`) }));
+  has(out, /^dark: .*full-canvas rect.*url\(#g\)/);
+  assert.ok(!out.some((i) => /^light: .*full-canvas/.test(i)), String(out));
+});
+test("PG1 an unreadable background fails the CLI", () => {
+  const f = chartFile(
+    "pg1.svg",
+    svg({
+      style: "",
+      bg: CANVAS("url(#g)"),
+      body: text("x", `fill="#000000"`),
+    }),
+  );
+  expectExit(cli(f), 1, /full-canvas rect/);
+});
+test("PG1 a rect with an unreadable fill behind text is an issue", () => {
+  const body = `<rect x="5" y="5" width="100" height="40" fill="url(#g)"/>${text("x", `fill="#000000"`, 10, 30)}`;
+  const out = issuesOf(svg({ style: "", body }));
+  has(out, /^light: "x" .*url\(#g\)/);
+});
+
+const BOX = (fill, extra = "") =>
+  `<rect x="5" y="5" width="100" height="40" fill="${fill}"${extra}/>`;
+test("PG2 a rect drawn after the text covers it: white text on black, then a white rect", () => {
+  const body = `${BOX("#000000")}${text("x", `fill="#ffffff"`, 10, 30)}${BOX("#ffffff")}`;
+  const out = issuesOf(svg({ style: "", body }));
+  has(out, /^light: "x" is covered by a rect drawn after it/);
+  has(out, /^dark: "x" is covered by a rect drawn after it/);
+});
+test("PG2 a full-canvas rect drawn after the text covers it", () => {
+  const body = `${text("x", `fill="#000000"`)}${CANVAS("#ffffff")}`;
+  has(
+    issuesOf(svg({ style: "", bg: "", body })),
+    /^light: "x" is covered by a rect drawn after it/,
+  );
+});
+test("PG2 the normal order (rect, then its text) is clean", () => {
+  const body = `${BOX("#000000")}${text("x", `fill="#ffffff"`, 10, 30)}`;
+  assert.deepEqual(issuesOf(svg({ style: "", body })), []);
+});
+test("PG2 a rect drawn after the text that does not reach the text is fine", () => {
+  const body = `${text("x", `fill="#000000"`, 10, 30)}<rect x="120" y="5" width="60" height="40" fill="#000000"/>`;
+  assert.ok(!issuesOf(svg({ style: "", body })).some((i) => /covered/.test(i)));
+});
+test("PG2 a smaller rect drawn after a larger one is the backdrop", () => {
+  const small = `<rect x="8" y="10" width="60" height="30" fill="#000000"/>`;
+  const body = `<rect x="5" y="5" width="100" height="40" fill="#ffffff"/>${small}${text("x", `fill="#ffffff"`, 10, 30)}`;
+  assert.deepEqual(issuesOf(svg({ style: "", body })), []);
+});
+test("PG2 a larger rect drawn after a smaller one hides it: the larger is the backdrop", () => {
+  const small = `<rect x="8" y="10" width="60" height="30" fill="#ffffff"/>`;
+  const body = `${small}<rect x="5" y="5" width="100" height="40" fill="#000000"/>${text("x", `fill="#ffffff"`, 10, 30)}`;
+  assert.deepEqual(issuesOf(svg({ style: "", body })), []);
+});
+test("PG2 the same nesting with a white smaller rect on top fails white text", () => {
+  const small = `<rect x="8" y="10" width="60" height="30" fill="#ffffff"/>`;
+  const body = `<rect x="5" y="5" width="100" height="40" fill="#000000"/>${small}${text("x", `fill="#ffffff"`, 10, 30)}`;
+  has(issuesOf(svg({ style: "", body })), /^light: "x" #ffffff at 1\.00:1/);
+});
+
+test("PG3 the page under a mark is the full-canvas stack painted before it", () => {
+  const body = `<rect x="20" y="60" width="100" height="20" fill="#dddddd"/>`;
+  const out = issuesOf(
+    svg({ style: "", bg: CANVAS("#000000") + CANVAS("#ffffff"), body }),
+  );
+  has(out, /^light: rect fill #dddddd at 1\.\d\d:1/);
+  has(out, /^dark: rect fill #dddddd at 1\.\d\d:1/);
+});
+test("PG3 a mark drawn between two canvas rects sees only the first", () => {
+  const body = `<rect x="20" y="60" width="100" height="20" fill="#dddddd"/>`;
+  const out = issuesOf(
+    svg({ style: "", bg: CANVAS("#000000"), body: body + CANVAS("#ffffff") }),
+  );
+  assert.deepEqual(out, []);
+});
+test("PG3 a translucent canvas layer is composited over the one beneath", () => {
+  const out = issuesOf(
+    svg({
+      style: "",
+      bg: CANVAS("#000000") + CANVAS("rgba(255,255,255,0.5)"),
+      body: `<rect x="20" y="60" width="100" height="20" fill="#808080"/>`,
+    }),
+  );
+  has(out, /^light: rect fill #808080 at 1\.0\d:1/);
+});
+test("PG3 per-theme recolours still apply to each canvas layer", () => {
+  const style = `@media (prefers-color-scheme: dark){rect[fill="#ffffff"]{fill:#0d1117}}`;
+  const out = issuesOf(
+    svg({
+      style,
+      bg: CANVAS("#000000") + CANVAS("#ffffff"),
+      body: `<rect x="20" y="60" width="100" height="20" fill="#dddddd"/>`,
+    }),
+  );
+  has(out, /^light: rect fill #dddddd at 1\.\d\d:1/);
+  assert.ok(!out.some((i) => /^dark:/.test(i)), String(out));
+});

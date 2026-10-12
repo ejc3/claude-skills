@@ -13,8 +13,12 @@
 //   - after a space: a unit only if it cannot be an ordinary word: a known unit (KNOWN
 //     below), a token containing `°` or `/` with a letter ("°C", "req/s", "MB/s"), or an
 //     acronym-shaped token (an upper-case letter after the first: "GHz", "kHz", "MiB",
-//     "GB", "CPUs"). Any other word is not a unit ("3 sources", "10 to 20", "5 or 6").
+//     "GB", "CPUs"). A longer word is not a unit ("3 sources"), nor is a function word
+//     ("10 to 20", "5 or 6").
 //     `%` and `×` need no space, so "5 %" is not "5%".
+//     A token of up to 3 letters that is not on FUNCTION_WORDS is also a unit ("12 V",
+//     "4 kg"): the tool cannot tell it from a unit it does not list, and a changed
+//     unit must not pass. A lone capital letter is never a function word ("12 A" is amperes).
 //   - count nouns ("files", "lines", "tasks", "apps", "cores", "days", ...) are known
 //     units, because a changed count noun is a change ("5 files" -> "5 lines"). They match
 //     singular or plural and with a hyphen ("64 cores" = "64-core"); an unlisted plural
@@ -91,6 +95,15 @@ const NOUN_FORM = new Map(
     [`${w}s`, w],
   ]),
 );
+// short English words that follow a number without being its unit ("3 of the apps", "5 x 3")
+const FUNCTION_WORDS = new Set([
+  ..."a an and are as at be by for if in is it of on or so the to was we x".split(
+    " ",
+  ),
+  ..."vs but not can has had did how may now new old all any out off up per via one two our you its".split(
+    " ",
+  ),
+]);
 const SPACE = "[ \\t\\u00a0\\u202f]";
 // an optional sign, then digits with an optional fraction, or a leading-dot decimal (.5).
 // The sign and a bare leading dot both need a non-alphanumeric left neighbour, so the
@@ -116,6 +129,13 @@ const unitAt = (rest) => {
   if (WORD_UNITS.includes(tok)) return tok;
   if (!hasLetter.test(tok)) return "";
   if (/[°/]/.test(tok) || acronym.test(tok)) return tok;
+  // anything else of up to 3 letters ("12 V", "4 kg") is a unit this tool does not know;
+  // reading it as one fails closed, where reading it as a word would pass a changed unit
+  if (
+    tok.length <= 3 &&
+    !FUNCTION_WORDS.has(tok.length > 1 ? tok.toLowerCase() : tok)
+  )
+    return tok;
   return "";
 };
 const nums = (s) =>

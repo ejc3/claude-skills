@@ -26,6 +26,11 @@
 // is reported as an issue, never skipped: the audit cannot vouch for what it cannot read.
 // Overlapping dark rules resolve by specificity (attribute conditions (0,1,0) each, a tag
 // name (0,0,1)), source order breaking ties. `!important` is not modelled.
+// Paint order is document order. The page under a text or mark is the full-canvas rects
+// drawn before it, blended over the theme's default page; a text's backdrop adds the
+// rects around its anchor drawn before it. A filled rect drawn after a text and around
+// its anchor, a full-canvas rect drawn after it, and a page or backdrop fill that cannot
+// be read are reported as issues: the audit certifies only what it can verify.
 // Not modelled: rotate/scale/matrix transforms, <use> (reported as notes).
 //
 // auditSvg returns the issue strings; `.notes` on the returned array lists the
@@ -554,14 +559,17 @@ export function auditSvg(
   const originY = hasVb ? vb[1] : 0;
 
   // drawn elements, in document order (not <defs>, clip paths or masks)
+  // `ord` is an element's paint order: a later element is drawn over an earlier one
   const shapes = [];
   const texts = [];
+  let paintOrder = 0;
   const visit = (el) => {
     for (const k of el.kids) {
       if (k.text !== undefined || HIDDEN.has(k.tag)) continue;
       if (k.tag === "use") notes.add("<use> references are not followed");
       if (PAINTS.has(k.tag)) shapes.push(k);
       else if (k.tag === "text") texts.push(k);
+      k.ord = paintOrder++;
       visit(k);
     }
   };
@@ -583,10 +591,11 @@ export function auditSvg(
       (total !== null && Math.abs(parseFloat(v) - total) < 0.5));
   const filledIn = (e, theme) => !isNone(paint(e, "fill", theme, ctx).raw);
 
-  // the page, per theme: the first rect covering the whole canvas that has a fill in THAT
-  // theme (a rect that is `none` in light can gain a fill from a dark rule, and the
-  // reverse), else the theme's default page with a note
-  const fullCanvas = shapes.filter((e) => {
+  // the page under an element: the rects covering the whole canvas that are painted before
+  // it and have a fill in the theme (a rect that is `none` in light can gain a fill from a
+  // dark rule, and the reverse), composited in document order over the theme's default page
+  // (so the topmost opaque layer shows, with translucent layers above it blended in)
+  const layers = shapes.filter((e) => {
     if (e.tag !== "rect") return false;
     const g = geom(e);
     return (
@@ -596,17 +605,28 @@ export function auditSvg(
       sizeIs(e.a.height, H)
     );
   });
-  const bgRects = {};
-  const page = {};
+  const pageAt = (theme, ord) => {
+    let bg = FALLBACK_PAGE[theme];
+    for (const e of layers) {
+      if (e.ord > ord) break;
+      const f = filledIn(e, theme) ? paint(e, "fill", theme, ctx).color : null;
+      if (f) bg = over(f, bg);
+    }
+    return bg;
+  };
   for (const theme of THEMES) {
-    bgRects[theme] = fullCanvas.find((e) => filledIn(e, theme));
-    const f = bgRects[theme]
-      ? paint(bgRects[theme], "fill", theme, ctx).color
-      : null;
-    page[theme] = f ? over(f, FALLBACK_PAGE[theme]) : FALLBACK_PAGE[theme];
-    if (!f) notes.add(FALLBACK_NOTE);
+    const filled = layers.filter((e) => filledIn(e, theme));
+    if (!filled.length) notes.add(FALLBACK_NOTE);
+    // a page layer whose paint cannot be read leaves the page colour unknown
+    for (const e of filled) {
+      const p = paint(e, "fill", theme, ctx);
+      if (!p.color)
+        out.push(
+          `${theme}: full-canvas rect fill ${p.raw} cannot be read: the page colour is unknown`,
+        );
+    }
   }
-  const isBg = (e) => THEMES.some((t) => bgRects[t] === e);
+  const isBg = (e) => layers.includes(e);
 
   // rects that carry a fill in either theme; a text's backdrop is chosen per theme below
   const rects = shapes
@@ -647,16 +667,16 @@ export function auditSvg(
     const y = attrUp(run, "y") + dy;
     const sizeRaw = (theme) => computed(run.el, "font-size", theme, ctx);
     const size = fontPx(sizeRaw("light"));
-    // the rects drawn under the text's anchor point, smallest first
-    const underAll = rects
-      .filter(
-        (r) =>
-          x > r.x &&
-          x < r.x + r.w &&
-          y - size * 0.35 > r.y &&
-          y - size * 0.35 < r.y + r.h,
-      )
-      .sort((a, b) => a.w * a.h - b.w * b.h);
+    // the rects around the text's anchor point, in paint order; `underAll` is the same
+    // set smallest first
+    const around = rects.filter(
+      (r) =>
+        x > r.x &&
+        x < r.x + r.w &&
+        y - size * 0.35 > r.y &&
+        y - size * 0.35 < r.y + r.h,
+    );
+    const underAll = [...around].sort((a, b) => a.w * a.h - b.w * b.h);
     const under = underAll.find((r) => filledIn(r.e, "light")) ?? underAll[0];
     const isBox =
       under &&
@@ -692,12 +712,28 @@ export function auditSvg(
         );
         continue;
       }
-      let bg = page[theme];
-      const backdrop = underAll.find((r) => filledIn(r.e, theme));
-      if (backdrop) {
-        const f = paint(backdrop.e, "fill", theme, ctx).color;
-        if (f) bg = over(f, bg);
+      // the backdrop is what is painted before the text, blended in paint order; a filled
+      // shape painted after the text covers it, so what shows is unknown
+      const ord = run.root.ord;
+      let bg = pageAt(theme, ord);
+      for (const r of around) {
+        if (!filledIn(r.e, theme)) continue;
+        const f = paint(r.e, "fill", theme, ctx);
+        if (r.e.ord > ord)
+          out.push(
+            `${theme}: "${run.s}" is covered by a rect drawn after it (fill ${f.raw}): the audit cannot verify it`,
+          );
+        else if (f.color) bg = over(f.color, bg);
+        else
+          out.push(
+            `${theme}: "${run.s}" sits on a rect with a fill the audit cannot read (${f.raw})`,
+          );
       }
+      for (const e of layers)
+        if (e.ord > ord && filledIn(e, theme))
+          out.push(
+            `${theme}: "${run.s}" is covered by a rect drawn after it (fill ${paint(e, "fill", theme, ctx).raw}): the audit cannot verify it`,
+          );
       const c = contrast(over(p.color, bg), bg);
       if (c < 4.5)
         out.push(
@@ -763,7 +799,8 @@ export function auditSvg(
         );
         continue;
       }
-      const c = contrast(over(p.color, page[theme]), page[theme]);
+      const pg = pageAt(theme, e.ord);
+      const c = contrast(over(p.color, pg), pg);
       if (c === 1) continue;
       if (c < 3) {
         const alpha =
