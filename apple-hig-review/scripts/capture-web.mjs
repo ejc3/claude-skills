@@ -3,24 +3,30 @@
 //
 //   node capture-web.mjs <out-dir> <url> [<url> ...]
 //
-// Needs Playwright where it runs: `npm i playwright` and
-// `npx playwright install webkit chromium`.
+// Run it from a project that has Playwright installed (`npm i playwright`, then
+// `npx playwright install webkit chromium`): Playwright is loaded from the current
+// directory, not from this script's.
 //
 // Each URL is taken full-page as:
-//   safari-iphone    WebKit emulating a current iPhone, light, dark, and reduced motion
-//   safari-iphone-se WebKit emulating the smallest supported iPhone, light
-//   chrome-android   Chromium emulating an Android phone, light and dark
-//   reflow-320       320 CSS px wide (WCAG 1.4.10), light
+//   webkit-iphone     WebKit emulating a current iPhone: light, dark, and reduced motion
+//   webkit-iphone-se  WebKit emulating the smallest iPhone current iOS supports (375 pt): light
+//   chromium-android  Chromium emulating an Android phone: light and dark
+//   reflow-320        a desktop browser 320 CSS px wide, as WCAG 1.4.10 describes: light
 //
 // CAPTURE_TZ (an IANA zone, e.g. America/New_York) and CAPTURE_LOCALE (default en-US) set
 // the emulated browser's zone and locale. Set the zone the app's users are in: otherwise
 // times render in the runner's zone (often UTC), which a reviewer can mistake for a bug.
 //
-// Emulation shows layout, color and reflow. It does not show the browser's own toolbar,
-// the on-screen keyboard, or the OS text size: capture those in a real browser (see web.md).
+// What emulation shows: layout, color, contrast and reflow. What it does not: the
+// browser's own toolbar, the on-screen keyboard, the OS text size, and, on Linux, Apple's
+// system fonts. WebKit here is not Safari, so text may wrap differently than on an iPhone.
+// Check anything that depends on those in a real browser (see web.md).
 import { mkdirSync } from "node:fs";
+import { createRequire } from "node:module";
 import { join } from "node:path";
-import { chromium, devices, webkit } from "playwright";
+
+const require = createRequire(join(process.cwd(), "package.json"));
+const { chromium, devices, webkit } = require("playwright");
 
 const [outDir, ...urls] = process.argv.slice(2);
 if (!outDir || urls.length === 0) {
@@ -37,21 +43,31 @@ function device(...names) {
 }
 
 const profiles = [
-  { name: "safari-iphone", engine: webkit, context: device("iPhone 15", "iPhone 14", "iPhone 13"),
+  { name: "webkit-iphone", engine: webkit, context: device("iPhone 15", "iPhone 14", "iPhone 13"),
     variants: [{ colorScheme: "light" }, { colorScheme: "dark" }, { colorScheme: "light", reducedMotion: "reduce" }] },
-  { name: "safari-iphone-se", engine: webkit, context: device("iPhone SE"), variants: [{ colorScheme: "light" }] },
-  { name: "chrome-android", engine: chromium, context: device("Pixel 7", "Pixel 5"),
+  { name: "webkit-iphone-se", engine: webkit, context: device("iPhone SE (3rd gen)"),
+    variants: [{ colorScheme: "light" }] },
+  { name: "chromium-android", engine: chromium, context: device("Pixel 7", "Pixel 5"),
     variants: [{ colorScheme: "light" }, { colorScheme: "dark" }] },
+  // Not a phone: 1.4.10 is a desktop browser at 1280 px zoomed to 400%. Mobile emulation
+  // would lay a page without a viewport tag out at 980 px and shrink it, hiding a failure.
   { name: "reflow-320", engine: chromium,
-    context: { viewport: { width: 320, height: 640 }, deviceScaleFactor: 2, isMobile: true, hasTouch: true },
+    context: { viewport: { width: 320, height: 640 }, deviceScaleFactor: 2, isMobile: false, hasTouch: false },
     variants: [{ colorScheme: "light" }] },
 ];
 
 const place = { locale: process.env.CAPTURE_LOCALE || "en-US",
   ...(process.env.CAPTURE_TZ ? { timezoneId: process.env.CAPTURE_TZ } : {}) };
 
-const slug = (url) => new URL(url).pathname.replace(/[^a-z0-9]+/gi, "-").replace(/^-|-$/g, "") || "home";
+// A name per URL that differs whenever the URLs do: host, path and query.
+function slug(url, index) {
+  const u = new URL(url);
+  const base = `${u.pathname}${u.search}`.replace(/[^a-z0-9]+/gi, "-").replace(/^-|-$/g, "") || "home";
+  const hosts = new Set(urls.map((x) => new URL(x).host));
+  return `${String(index + 1).padStart(2, "0")}-${hosts.size > 1 ? `${u.host.replace(/[^a-z0-9]+/gi, "-")}-` : ""}${base}`;
+}
 
+let failures = 0;
 for (const profile of profiles) {
   // Headless Chromium drops kerning unless hinting is off.
   const args = profile.engine === chromium ? ["--font-render-hinting=none"] : [];
@@ -60,12 +76,21 @@ for (const profile of profiles) {
     for (const variant of profile.variants) {
       const context = await browser.newContext({ ...profile.context, ...place, ...variant });
       const page = await context.newPage();
-      for (const url of urls) {
-        await page.goto(url, { waitUntil: "networkidle", timeout: 45_000 }).catch(() => page.goto(url, { waitUntil: "load" }));
+      for (const [index, url] of urls.entries()) {
         const tag = [profile.name, variant.colorScheme, variant.reducedMotion && "reduced-motion"].filter(Boolean).join("-");
-        const file = join(outDir, `${slug(url)}-${tag}.png`);
-        await page.screenshot({ path: file, fullPage: true });
-        console.log(file);
+        const file = join(outDir, `${slug(url, index)}-${tag}.png`);
+        try {
+          const response = await page.goto(url, { waitUntil: "load", timeout: 45_000 });
+          // Let late requests settle, but never wait long on a page that keeps a request open.
+          await page.waitForLoadState("networkidle", { timeout: 5_000 }).catch(() => {});
+          const status = response?.status();
+          if (status && status >= 400) console.warn(`warning: ${url} answered ${status}`);
+          await page.screenshot({ path: file, fullPage: true });
+          console.log(file);
+        } catch (error) {
+          failures += 1;
+          console.error(`failed: ${url} (${tag}): ${error.message.split("\n")[0]}`);
+        }
       }
       await context.close();
     }
@@ -73,3 +98,4 @@ for (const profile of profiles) {
     await browser.close();
   }
 }
+process.exit(failures ? 1 : 0);

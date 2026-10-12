@@ -63,9 +63,13 @@ Judge real pixels, as for a native app, in at least these:
   browser's own toolbar and keyboard are not in the picture.
 - **Emulated captures for breadth:** `scripts/capture-web.mjs` takes each page at phone
   widths in WebKit and Blink, light and dark, and with reduced motion. Emulation is right
-  for layout, contrast and reflow; it does not show the browser's toolbar, the keyboard, or
-  how the OS text size reaches the page.
-- **Reflow:** 320 CSS px wide, which WCAG 1.4.10 equates with 400% zoom at 1280 px.
+  for layout, color, contrast and reflow. It does not show the browser's toolbar, the
+  keyboard, or how the OS text size reaches the page, and WebKit on Linux is not Safari:
+  it has none of Apple's system fonts, so wrapping and truncation can differ from an
+  iPhone. Call these captures emulated, never Safari evidence, and confirm a wrapping or
+  truncation finding in the Simulator.
+- **Reflow:** 320 CSS px wide in a desktop browser (not phone emulation, which shrinks a
+  page that has no viewport tag), which WCAG 1.4.10 equates with 400% zoom at 1280 px.
 - **Text size:** 200% text (WCAG 1.4.4). On iOS that is Safari's page zoom or the system
   text size if the site follows it (WebKit's `font: -apple-system-body`); on Android,
   Chrome's text scaling setting.
@@ -77,8 +81,9 @@ Judge real pixels, as for a native app, in at least these:
 Pick what applies to the area.
 
 - **Targets and gestures:**
-  - WCAG 2.5.8 (AA): targets at least 24×24 CSS px, or spaced so a 24 px circle on each
-    does not overlap another target.
+  - WCAG 2.5.8 (AA): targets at least 24×24 CSS px, or spaced so that a 24 px circle
+    centred on each undersized target intersects neither another target nor another
+    undersized target's circle (with the criterion's listed exceptions).
   - Platform comfort sizes are larger: 44×44 pt in Apple's HIG, 48×48 dp in Material.
     Treat them as should-fix for primary controls.
   - WCAG 2.5.7 (AA): anything done by dragging has a single-pointer alternative.
@@ -88,8 +93,9 @@ Pick what applies to the area.
   - With `viewport-fit=cover`, pad fixed bars by `env(safe-area-inset-*)`.
   - Full-height layouts use the dynamic viewport units (`dvh`, `svh`) rather than `100vh`,
     which on mobile ignores the collapsing toolbar.
-  - Fixed and sticky bars must not cover the focused control (WCAG 2.4.11, AA) or sit
-    under the on-screen keyboard. Chrome on Android's `interactive-widget` viewport key
+  - Fixed and sticky bars must not hide the focused control entirely (WCAG 2.4.11, AA;
+    hiding any part of it fails only 2.4.12, AAA), and must not sit under the on-screen
+    keyboard. Chrome on Android's `interactive-widget` viewport key
     and the Visual Viewport API are the tools; check what each engine supports.
 - **Text:**
   - Text resizes to 200% without loss (1.4.4) and reflows at 320 px (1.4.10).
@@ -106,15 +112,19 @@ Pick what applies to the area.
   AAA, should-fix).
 - **Semantics and focus:**
   - Native elements first: `<button>` for actions, `<a href>` for navigation, labels on
-    every field, landmarks, one `h1`.
-  - Icon-only controls have accessible names (4.1.2). Live regions announce changing
-    content (4.1.3).
+    every field (1.3.1, 4.1.2), landmarks, and headings that describe the sections (2.4.6).
+    A single `h1` is common practice, not a requirement of WCAG or HTML.
+  - Icon-only controls have accessible names (4.1.2). Status messages (a result count,
+    "saved", an error summary) reach assistive technology without moving focus (4.1.3).
+    A live score is not a status message under 4.1.3; announcing it is judgment, and
+    should be polite and rate-limited.
   - A visible focus indicator (2.4.7). Dialogs trap focus and return it on close (APG
     dialog pattern).
   - Hover-only affordances do not exist on touch; gate them with `@media (hover: hover)`.
 - **Forms:** correct `type`, `autocomplete` tokens (1.3.5) and `inputmode` so the right
-  keyboard appears; `enterkeyhint` where the return key's label matters; errors described
-  in text and tied to the field (3.3.1).
+  keyboard appears; `enterkeyhint` where the return key's label matters; an input error
+  identified and described in text (3.3.1). Tying the message to its field
+  (`aria-describedby`) is good practice beyond 3.3.1.
 - **Navigation:** the back button and back gestures return to the previous view and its
   scroll position. Client-side routes are real URLs, so pages can be shared and reloaded.
   A page restored from the back/forward cache re-checks anything time-sensitive.
