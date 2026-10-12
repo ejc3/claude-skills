@@ -5,7 +5,8 @@
 //   node linkcheck.mjs <doc.md>...   (exit 1 on any broken link, 2 on a usage or read error)
 //
 // Link forms read: [t](dest), [t](dest "title"), [t](dest 'title'), [t](<dest with spaces>),
-// ![alt](src), and `[ref]: dest` definitions (the dest may start the next line). Full [t][label] and collapsed [label][]
+// ![alt](src), and `[ref]: dest` definitions (the dest may start the next line; a definition
+// with no destination defines nothing). Full [t][label] and collapsed [label][]
 // reference usages must name a definition (labels match case-insensitively, whitespace
 // collapsed); a shortcut [label] is ordinary text unless a definition exists, and then the
 // definition's destination is what gets checked. A destination starting with `/` is
@@ -147,46 +148,52 @@ const LINK =
 const noCode = (line) =>
   line.replace(/(`+)[\s\S]*?\1/g, (m) => " ".repeat(m.length));
 
-// destinations on one line (code spans removed), in order. A `[label]:` definition with
-// nothing after it takes its destination from `next`, the following line (CommonMark
-// allows one line ending before the destination): inside the same blockquote, holding only
-// the destination and an optional title.
-function linkDests(line, next = "") {
-  const text = noCode(line);
-  const out = [];
+// a `[label]: dest` definition on one line (code spans removed) → { label, dest }, else
+// null. A footnote (`[^n]:`) is not a link definition. A definition with nothing after the
+// colon takes its destination from `next`, the following line (CommonMark allows one line
+// ending before the destination): inside the same blockquote, holding only the destination
+// and an optional title. With no destination there is no definition: `dest` is undefined
+// and the label stays undefined.
+function definition(line, next = "") {
   const def =
-    /^((?:[ \t]*>)*)[ \t]*(?:(?:[-*+]|\d+[.)])[ \t]+)?\[([^\]]+)\]:[ \t]*(?:<([^>]*)>|(\S+))?/.exec(
-      text,
+    /^((?:[ \t]*>)*)[ \t]*(?:(?:[-*+]|\d+[.)])[ \t]+)?\[((?:\\.|[^\]\\])+)\]:[ \t]*(?:<([^>]*)>|(\S+))?/.exec(
+      noCode(line),
     );
-  if (def && (def[3] ?? def[4]) !== undefined) out.push(def[3] ?? def[4]);
-  else if (def && !def[2].startsWith("^")) {
-    const quotes = def[1].split(">").length - 1;
-    const rest = noCode(next).replace(
-      new RegExp(`^(?:[ \\t]*>){0,${quotes}}`),
-      "",
+  if (!def || !def[2].trim() || def[2].startsWith("^")) return null;
+  const label = def[2];
+  if ((def[3] ?? def[4]) !== undefined)
+    return { label, dest: def[3] ?? def[4] };
+  const quotes = def[1].split(">").length - 1;
+  const rest = noCode(next).replace(
+    new RegExp(`^(?:[ \\t]*>){0,${quotes}}`),
+    "",
+  );
+  const dest =
+    /^[ \t]*(?:<([^>]*)>|([^\s>]\S*))(?:[ \t]+(?:"[^"]*"|'[^']*'|\([^)]*\)))?[ \t]*$/.exec(
+      rest,
     );
-    const dest =
-      /^[ \t]*(?:<([^>]*)>|([^\s>]\S*))(?:[ \t]+(?:"[^"]*"|'[^']*'|\([^)]*\)))?[ \t]*$/.exec(
-        rest,
-      );
-    if (dest) out.push(dest[1] ?? dest[2]);
-  }
-  for (const m of text.matchAll(LINK)) out.push(m[1] ?? m[2]);
+  return { label, dest: dest ? (dest[1] ?? dest[2]) : undefined };
+}
+
+// destinations on one line (code spans removed), in order: a definition's, then each link's
+function linkDests(line, next = "") {
+  const out = [];
+  const dest = definition(line, next)?.dest;
+  if (dest !== undefined) out.push(dest);
+  for (const m of noCode(line).matchAll(LINK)) out.push(m[1] ?? m[2]);
   return out;
 }
 
 // reference labels compare case-insensitively with internal whitespace collapsed
 const normLabel = (s) => s.trim().replace(/\s+/g, " ").toLowerCase();
 
-// the labels of the `[label]: dest` definitions in a document's lines (fences already blank)
+// the labels of the `[label]: dest` definitions that have a destination, in a document's
+// lines (fences already blank)
 function definedLabels(lines) {
   const set = new Set();
-  for (const [, line] of lines) {
-    const m =
-      /^(?:[ \t]*>)*[ \t]*(?:(?:[-*+]|\d+[.)])[ \t]+)?\[((?:\\.|[^\]\\])+)\]:/.exec(
-        line,
-      );
-    if (m && m[1].trim() && !m[1].startsWith("^")) set.add(normLabel(m[1]));
+  for (const [k, [, line]] of lines.entries()) {
+    const def = definition(line, lines[k + 1]?.[1]);
+    if (def?.dest !== undefined) set.add(normLabel(def.label));
   }
   return set;
 }

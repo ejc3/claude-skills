@@ -22,6 +22,7 @@
 //     match singular or plural and with a hyphen ("64 cores" = "64-core"); any other
 //     word after a hyphen is not a unit ("5-fold" is 5).
 // A number may carry an exponent with its sign: 1e-6, 1e+6 and 1e6 are three numbers.
+// A vulgar fraction is a number, alone or after digits (½, 1½), as is 1⁄2 (fraction slash).
 // "3x4" and "5/10" are numbers without units. A minus sign counts only when no letter or
 // digit precedes it ("10-20" is 10 and 20). Trailing punctuation is dropped, so moving a
 // comma or a period does not read as a new number.
@@ -108,9 +109,13 @@ const SPACE = "[ \\t\\u00a0\\u202f]";
 // then an optional exponent with its sign (1e-6, 1e+6 and 1e6 are three numbers; an "e"
 // with no digits after it is left to the unit, "1e"). The sign and a bare leading dot
 // both need a non-alphanumeric left neighbour, so the ".3" of "v1.2.3" and the "-" of
-// "x-5" are not tokens of their own.
-const NUMBER =
-  /(?<n>(?:(?<![\p{L}\p{N}])[−-])?(?:\d(?:[\d,]*\d)?(?:\.\d+)?|(?<![\p{L}\p{N}.])\.\d+)(?:[eE][+−-]?\d+)?)/gu;
+// "x-5" are not tokens of their own. A vulgar fraction (½, ⅔, ↉, ...) is a number alone or
+// after digits ("1½"), and so is a fraction-slash form ("1⁄2").
+const FRACTION = "[½⅓⅔¼¾⅕⅖⅗⅘⅙⅚⅐⅛⅜⅝⅞⅑⅒↉]";
+const NUMBER = new RegExp(
+  `(?<n>(?:(?<![\\p{L}\\p{N}])[−-])?(?:\\d(?:[\\d,]*\\d)?(?:${FRACTION}|⁄\\d+|(?:\\.\\d+)?(?:[eE][+−-]?\\d+)?)|(?<![\\p{L}\\p{N}.])\\.\\d+(?:[eE][+−-]?\\d+)?|${FRACTION}))`,
+  "gu",
+);
 // an exponent on a unit: superscript (m², s⁻¹) or caret (m^2, s^-1)
 const SUPERSCRIPT = "[⁺⁻]?[⁰¹²³⁴⁵⁶⁷⁸⁹]+";
 const EXPONENT = `(?:${SUPERSCRIPT}|\\^[+−-]?\\d+)`;

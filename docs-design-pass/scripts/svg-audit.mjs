@@ -33,11 +33,15 @@
 // backdrop is every colour the rects painted before it composite to over the region it
 // paints (each region of the plane cut by the rects' edges is composited on its own, so
 // the darkest and the lightest backdrop both count), over the theme's default page.
+// The page is the run of full-canvas rect fills drawn before anything else; a
+// full-canvas rect drawn after content is an ordinary rect over it.
 // A stroke drawn before a text under its glyphs is composited both ways, except a grid
 // hairline; a mark is not checked against other marks' strokes under it (marks that
 // cross); a stroke's own element's fill is part of its backdrop. A filled circle, path
 // or polyline drawn before a text or mark it overlaps is an issue (its coverage is not
-// modelled), as is anything painted after a text over its glyphs.
+// modelled), as is anything painted after a text over its glyphs, and any one shape
+// painted after a mark over all of it (a fill, or a stroke's band; partial overlap is
+// marks that cross).
 // A text is laid out as rsvg and Chromium both do: XML whitespace stripped at its ends
 // and collapsed inside, other spaces (NBSP, U+202F) kept; a line break inside a text or
 // a non-collapsible space at either end, where the two differ, is refused, and so is a
@@ -52,7 +56,10 @@
 // which are taken to fall within the same bounds, not measured. Covering is
 // over-approximated where geometry is not exact: a mitred join reaches 4 half widths
 // around its vertex (the default miter limit) and a rounded rect's stroke corner is taken
-// as square. Such approximations can only add issues.
+// as square. Such approximations can only add issues. Hiding is under-approximated the
+// same way: a stroke hides a mark only within one segment's band, a circle's ring or a
+// rect's band with its inside taken square, so a mark hidden only by a join, a cap or
+// several shapes together is not reported.
 //
 // auditSvg returns the issue strings; `.notes` on the returned array lists the
 // assumptions made (for example the page colour used when the SVG draws no background).
@@ -65,7 +72,7 @@ const THEMES = ["light", "dark"];
 // the page behind an SVG that draws no background rect of its own
 const FALLBACK_PAGE = { light: [255, 255, 255], dark: [13, 17, 23] };
 const FALLBACK_NOTE =
-  "no background rect: assuming a #ffffff page in light and #0d1117 in dark";
+  "no background rect drawn first: assuming a #ffffff page in light and #0d1117 in dark";
 
 const lum = ([r, g, b]) => {
   const f = (c) => (
@@ -825,6 +832,26 @@ const polyMeets = (g, b) =>
     }
     return Math.abs(area) > 1e-9;
   });
+// the nonzero winding number of a straight-edged fill (every subpath closed) around a point
+const winding = (subpaths, [x, y]) => {
+  let w = 0;
+  for (const { pts } of subpaths)
+    for (let i = 0; i < pts.length; i++) {
+      const a = pts[i];
+      const b = pts[(i + 1) % pts.length];
+      const side = (b[0] - a[0]) * (y - a[1]) - (x - a[0]) * (b[1] - a[1]);
+      if (a[1] <= y) {
+        if (b[1] > y && side > 0) w++;
+      } else if (b[1] <= y && side < 0) w--;
+    }
+  return w;
+};
+// does a straight-edged fill paint all of the box? No edge enters the box's inside, so the
+// inside is all filled or all not, and its centre is filled
+const polyHolds = (g, b) =>
+  !g.subpaths.some(({ pts }) =>
+    pts.some((p, i) => bandMeets(p, pts[(i + 1) % pts.length], 0, 0, 0, b)),
+  ) && winding(g.subpaths, [(b[0] + b[2]) / 2, (b[1] + b[3]) / 2]) !== 0;
 // does the band of half width d around segment a-b, extended by e0 before a and e1
 // after b (a butt or square cap), meet the box? (separating axes; touching is apart)
 const bandMeets = (a, b, d, e0, e1, box) => {
@@ -1526,6 +1553,61 @@ export function auditSvg(
       ? paintOf(e, "fill", theme).alpha > 0 && fillMeets(e, b)
       : strokeMeets(e, b, theme);
 
+  // does the shape's channel paint over all of box b? Exact for fills; a stroke holds a
+  // box inside one segment's band (caps and joins left out), inside a circle's ring, or
+  // between a rect's outer edge and its inner box taken square
+  const channelHolds = (e, ch, b, theme) => {
+    const r = reachBox(e, ch, theme);
+    if (!r || b[0] < r[0] || b[1] < r[1] || b[2] > r[2] || b[3] > r[3])
+      return false;
+    const g = geom(e);
+    const inDisc = (c, rad) =>
+      corners(b).every((p) => Math.hypot(p[0] - c[0], p[1] - c[1]) <= rad);
+    if (ch === "fill") {
+      if (g.kind === "rect") return rectHolds(g, b);
+      if (g.kind === "circle") return inDisc(g.c, g.r);
+      return polyHolds(g, b);
+    }
+    const d = half(e, theme);
+    if (g.kind === "rect") {
+      const round = g.rx > 0;
+      const outer = {
+        box: grow(g.box, d),
+        rx: round ? g.rx + d : 0,
+        ry: round ? g.ry + d : 0,
+      };
+      const inner = [g.box[0] + d, g.box[1] + d, g.box[2] - d, g.box[3] - d];
+      return (
+        rectHolds(outer, b) &&
+        !(inner[0] < inner[2] && inner[1] < inner[3] && overlaps(inner, b))
+      );
+    }
+    if (g.kind === "circle")
+      return inDisc(g.c, g.r + d) && toBox(g.c, b) >= g.r - d;
+    const { cap } = strokeForm(e, theme);
+    for (const { pts, closed } of g.subpaths) {
+      const n = pts.length;
+      const segs = closed ? n : n - 1;
+      for (let i = 0; i < segs; i++) {
+        const a = pts[i];
+        const c = pts[(i + 1) % n];
+        const L = Math.hypot(c[0] - a[0], c[1] - a[1]);
+        if (!L) continue;
+        const ux = (c[0] - a[0]) / L;
+        const uy = (c[1] - a[1]) / L;
+        const e0 = !closed && i === 0 && cap === "square" ? d : 0;
+        const e1 = !closed && i === segs - 1 && cap === "square" ? d : 0;
+        const inBand = ([x, y]) => {
+          const along = (x - a[0]) * ux + (y - a[1]) * uy;
+          const across = (y - a[1]) * ux - (x - a[0]) * uy;
+          return along >= -e0 && along <= L + e1 && Math.abs(across) <= d;
+        };
+        if (corners(b).every(inBand)) return true;
+      }
+    }
+    return false;
+  };
+
   const isCanvas = (e) => {
     if (e.tag !== "rect") return false;
     const g = geom(e);
@@ -1555,9 +1637,6 @@ export function auditSvg(
     )
       unsupported(`self-intersecting fill on <${e.tag}>`);
   const texts = drawn.filter((e) => e.tag === "text");
-  for (const theme of THEMES)
-    if (!shapes.some((e) => isCanvas(e) && paintOf(e, "fill", theme).alpha > 0))
-      notes.add(FALLBACK_NOTE);
 
   // ---- backdrops: the rects painted before an element, over the region it paints
   // (region: { box, meets(b) }). Each cell of the plane cut by those rects' edges (and
@@ -1698,6 +1777,47 @@ export function auditSvg(
     shown.push(t);
   }
   const shownSet = new Set(shown);
+  const paints = (t, theme) => paintOf(t, "fill", theme).alpha > 0;
+  // the page in a theme: the run of full-canvas rect fills drawn before anything else that
+  // paints there (a canvas rect's own stroke ends it). A full-canvas rect drawn after
+  // content is an ordinary rect that covers what is under it.
+  const pages = Object.fromEntries(
+    THEMES.map((theme) => {
+      const set = new Set();
+      for (const e of drawn) {
+        const painted =
+          e.tag === "text"
+            ? paints(e, theme) && content(e) !== ""
+            : SHAPES.get(e.tag).some((ch) => reachBox(e, ch, theme));
+        if (!painted) continue;
+        if (!isCanvas(e) || !reachBox(e, "fill", theme)) break;
+        set.add(e);
+        if (reachBox(e, "stroke", theme)) break;
+      }
+      if (!set.size) notes.add(FALLBACK_NOTE);
+      return [theme, set];
+    }),
+  );
+  // the paint drawn after element el in a theme that hits(e, ch) selects, one channel per
+  // element: [{ e, ch }]. A text is covered by any of it over a glyph, a mark by paint that
+  // holds all of it
+  const paintedAfter = (el, theme, hits) => {
+    const found = [];
+    for (let i = el.ord + 1; i < drawn.length; i++) {
+      const e = drawn[i];
+      const chans =
+        e.tag === "text"
+          ? shownSet.has(e) && paints(e, theme)
+            ? ["fill"]
+            : []
+          : SHAPES.get(e.tag).filter((ch) => reachBox(e, ch, theme));
+      const ch = chans.find((c) => hits(e, c));
+      if (ch) found.push({ e, ch });
+    }
+    return found;
+  };
+  const coveredBy = (theme, what, { e, ch }) =>
+    `${theme}: ${what} is covered by ${article(e.tag)} drawn after it (${ch} ${paintOf(e, ch, theme).raw}): the audit cannot verify it`;
   const anchorOf = (t) => [num(t, "x") + t.dx, num(t, "y") + t.dy];
   const sizeOf = (t) => +prop(t, "font-size", "light");
   // the cells a text's glyphs can occupy, absolute, and their union
@@ -1718,7 +1838,6 @@ export function auditSvg(
       ]);
       return cells.length ? { cells, box: union(cells) } : null;
     });
-  const paints = (t, theme) => paintOf(t, "fill", theme).alpha > 0;
   // rects that carry a fill in a theme, for the figure-box floor
   const filledRects = (theme) =>
     shapes.filter(
@@ -1740,7 +1859,8 @@ export function auditSvg(
     for (const theme of THEMES) {
       sizeIssues[theme] = [];
       if (!paints(t, theme)) continue; // a text that paints nothing is not read
-      // a figure box: the smallest filled rect around the anchor, stroked, over 40x20
+      // a figure box: the smallest filled rect around the anchor, stroked, of any size over
+      // 3x3 (a labelled chip is a box)
       let under = null;
       for (const r of boxRects[theme]) {
         const [x0, y0, x1, y1] = geom(r).box;
@@ -1749,11 +1869,7 @@ export function auditSvg(
           if (!under || geom(r).w * geom(r).h < geom(under).w * geom(under).h)
             under = r;
       }
-      const isBox =
-        under &&
-        paintOf(under, "stroke", theme).alpha > 0 &&
-        geom(under).w > 40 &&
-        geom(under).h > 20;
+      const isBox = under && paintOf(under, "stroke", theme).alpha > 0;
       const shownPx = Math.round(px * 100) / 100;
       if (px < minText)
         sizeIssues[theme].push(`"${s}" is ${shownPx}px (floor ${minText}px)`);
@@ -1811,43 +1927,38 @@ export function auditSvg(
           `${theme}: "${s}" ${p.raw} at ${worst.toFixed(2)}:1 (needs 4.5:1)`,
         );
       // anything painted after the text over its glyphs hides what the reader sees
-      for (const e of drawn) {
-        if (e.ord <= t.ord) continue;
-        let cover = null;
+      const overGlyph = (e, ch) => {
         if (e.tag === "text") {
-          const later = shownSet.has(e) && paints(e, theme) && glyphsOf(e);
-          if (
-            later &&
+          const later = glyphsOf(e);
+          return (
+            later !== null &&
             overlaps(later.box, glyphs.box) &&
             later.cells.some((c) => glyphs.cells.some((d) => overlaps(c, d)))
-          )
-            cover = "fill";
-        } else
-          cover = SHAPES.get(e.tag).find((ch) => {
-            const r = reachBox(e, ch, theme);
-            return (
-              r &&
-              overlaps(r, glyphs.box) &&
-              glyphs.cells.some((c) => channelMeets(e, ch, c, theme))
-            );
-          });
-        if (cover)
-          out.push(
-            `${theme}: "${s}" is covered by ${article(e.tag)} drawn after it (${cover} ${paintOf(e, cover, theme).raw}): the audit cannot verify it`,
           );
-      }
+        }
+        const r = reachBox(e, ch, theme);
+        return (
+          r !== null &&
+          overlaps(r, glyphs.box) &&
+          glyphs.cells.some((c) => channelMeets(e, ch, c, theme))
+        );
+      };
+      for (const c of paintedAfter(t, theme, overGlyph))
+        out.push(coveredBy(theme, `"${s}"`, c));
     }
   }
 
   // ---- non-text marks: series lines, arrows and edges, dots (filled or hollow), solid
-  // bars, and small stroke-only tiles. Exempt: the fill of a full-canvas rect (the
-  // page), rects that frame text (a container or a heat-table cell: the anchor of a text
-  // painted in that theme lies inside it; the text is measured against it instead),
-  // labeled swatches (a legend key), stripes ≤3px, hairlines drawn in the grid colour
-  // (gridlines and rules are decoration; the axis labels carry the values), and, where the
-  // same shape's stroke paints and is itself audited as a mark, the parts of its fill that
-  // composite to exactly the colour under them (a hollow dot's centre). A translucent
-  // colour is composited over each backdrop before the 3:1 check.
+  // bars, and small stroke-only tiles. Exempt: the fill of a page rect (a full-canvas
+  // rect drawn before anything else), rects that frame text (a container or a heat-table
+  // cell: the anchor of a text painted in that theme lies inside it; the text is measured
+  // against it instead), labeled swatches (a legend key), stripes ≤3px, hairlines drawn
+  // in the grid colour (gridlines and rules are decoration; the axis labels carry the
+  // values), and, where the same shape's stroke paints and is itself audited as a mark,
+  // the parts of its fill that composite to exactly the colour under them (a hollow dot's
+  // centre). A translucent colour is composited over each backdrop before the 3:1 check.
+  // A stroke has no exemption: a page-coloured stroke fails at 1:1 wherever the page
+  // shows beside it, a halo around a filled dot included.
   const anchors = Object.fromEntries(
     THEMES.map((theme) => [
       theme,
@@ -1882,7 +1993,7 @@ export function auditSvg(
     if (!reachBox(e, ch, theme)) return false; // paints nothing
     if (e.tag === "rect") {
       const g = geom(e);
-      if (ch === "fill" && isCanvas(e)) return false;
+      if (ch === "fill" && pages[theme].has(e)) return false;
       if (!(g.w > 3 && g.h > 3)) return false;
       if (framesText(e, theme) || isLabeledSwatch(e, theme)) return false;
     }
@@ -1894,6 +2005,14 @@ export function auditSvg(
         if (!audited(e, ch, theme)) continue;
         const g = geom(e);
         const box = reachBox(e, ch, theme);
+        // paint drawn after the mark over all of it hides it (a text's glyph cells are
+        // bounds, not ink: a text hides no mark)
+        for (const c of paintedAfter(
+          e,
+          theme,
+          (l, lch) => l.tag !== "text" && channelHolds(l, lch, box, theme),
+        ))
+          out.push(coveredBy(theme, `${e.tag} ${ch}`, c));
         const region = { box, meets: (b) => channelMeets(e, ch, b, theme) };
         const other = otherFills[theme].find(
           (o) =>

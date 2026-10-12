@@ -439,3 +439,26 @@ test("MULTI a definition in a fence or indented code is still not read", () => {
     /undefined reference \[guide\]\[x\]/,
   );
 });
+
+// ---- review: only a definition with a destination defines its label --------------------------
+
+test("DEF a definition with no destination does not define its label", () => {
+  for (const doc of [
+    "[guide][x]\n\n[x]:\n",
+    "[guide][x]\n\n[x]:",
+    "[guide][x]\n\n[x]:\n\nnext paragraph\n",
+    "[guide][x]\n\n[x]:\nsome words here\n",
+    "[guide][x]\n\n> [x]:\n> \n",
+  ])
+    expectBroken(check(doc), 1, /a\.md:1: undefined reference \[guide\]\[x\]/);
+});
+test("DEF a collapsed reference to a definition with no destination is undefined", () => {
+  expectBroken(check("[x][]\n\n[x]:\n"), 1, /undefined reference \[x\]\[\]/);
+});
+test("DEF an empty <> destination still defines its label", () => {
+  expectClean(check("[guide][x]\n\n[x]: <>\n"), 1);
+});
+test("DEF a footnote definition's text is not a link destination", () => {
+  expectClean(check("text[^1]\n\n[^1]: a footnote here\n"), 0);
+  expectClean(check("text[^n]\n\n[^n]:\n    continued note\n"), 0);
+});

@@ -1119,12 +1119,20 @@ test("PG3 the page under a mark is the full-canvas stack painted before it", () 
   has(out, /^light: rect fill #dddddd at 1\.\d\d:1/);
   has(out, /^dark: rect fill #dddddd at 1\.\d\d:1/);
 });
-test("PG3 a mark drawn between two canvas rects sees only the first", () => {
+test("PG3 a mark drawn between two canvas rects sees only the first, and the second hides it", () => {
   const body = `<rect x="20" y="60" width="100" height="20" fill="#dddddd"/>`;
   const out = issuesOf(
     svg({ style: "", bg: CANVAS("#000000"), body: body + CANVAS("#ffffff") }),
   );
-  assert.deepEqual(out, []);
+  assert.ok(!out.some((i) => /rect fill #dddddd at/.test(i)), String(out));
+  has(
+    out,
+    /^light: rect fill is covered by a rect drawn after it \(fill #ffffff\)/,
+  );
+  has(
+    out,
+    /^dark: rect fill is covered by a rect drawn after it \(fill #ffffff\)/,
+  );
 });
 test("PG3 a translucent canvas layer is composited over the one beneath", () => {
   const out = issuesOf(
@@ -1812,4 +1820,181 @@ test("HOLLOW a hollow dot (page-coloured fill, dark stroke) still passes in both
   const dot = `<circle cx="50" cy="50" r="6" fill="#ffffff" stroke="#1c2330" stroke-width="2"/>`;
   assert.deepEqual(marks(dot, undefined, { style }), []);
   expectExit(cli(chartFile("hollow-dot.svg", svg({ style, body: dot }))), 0);
+});
+
+// ---- review: paint drawn after a mark that hides it ------------------------------------------
+
+test("HIDE a line under a later theme-aware full-canvas rect is covered in both themes", () => {
+  const style = darkRules(
+    `rect[fill="#ffffff"]{fill:#0d1117}line[stroke="#000000"]{stroke:#ffffff}`,
+  );
+  const line = `<line x1="10" y1="50" x2="90" y2="50" stroke="#000000" stroke-width="2"/>`;
+  const out = issuesOf(
+    doc(line + `<rect width="100" height="100" fill="#ffffff"/>`, { style }),
+  );
+  has(
+    out,
+    /^light: line stroke is covered by a rect drawn after it \(fill #ffffff\): the audit cannot verify it/,
+  );
+  has(
+    out,
+    /^dark: line stroke is covered by a rect drawn after it \(fill #0d1117\)/,
+  );
+  none(doc(line, { style })); // control: the same line with nothing over it
+});
+test("HIDE a mark held by a later rect, circle, path fill or a thick stroke is covered", () => {
+  const dot = `<circle cx="50" cy="50" r="2" fill="#000000"/>`;
+  for (const [cover, re] of [
+    [
+      `<rect x="40" y="40" width="20" height="20" fill="#777777"/>`,
+      /^light: circle fill is covered by a rect drawn after it \(fill #777777\)/,
+    ],
+    [
+      `<circle cx="50" cy="50" r="10" fill="#777777"/>`,
+      /^light: circle fill is covered by a circle drawn after it/,
+    ],
+    [
+      `<path d="M10 10L90 10L90 90L10 90Z" fill="#777777"/>`,
+      /^light: circle fill is covered by a path drawn after it \(fill #777777\)/,
+    ],
+    [
+      `<line x1="10" y1="50" x2="90" y2="50" stroke="#777777" stroke-width="10"/>`,
+      /^light: circle fill is covered by a line drawn after it \(stroke #777777\)/,
+    ],
+    [
+      `<rect x="46" y="46" width="8" height="8" fill="none" stroke="#777777" stroke-width="10"/>`,
+      /^light: circle fill is covered by a rect drawn after it \(stroke #777777\)/,
+    ],
+    [
+      `<circle cx="50" cy="50" r="5" fill="none" stroke="#777777" stroke-width="12"/>`,
+      /^light: circle fill is covered by a circle drawn after it \(stroke #777777\)/,
+    ],
+  ])
+    has(issuesOf(doc(dot + cover)), re);
+});
+test("HIDE partial overlap is not a hide: dots on a series line, a notch around a dot", () => {
+  none(
+    doc(
+      `<polyline points="10,50 50,20 90,50" fill="none" stroke="#1c2330" stroke-width="2"/><circle cx="10" cy="50" r="3" fill="#1c2330"/><circle cx="50" cy="20" r="3" fill="#1c2330"/><circle cx="90" cy="50" r="3" fill="#1c2330"/>`,
+    ),
+  );
+  // a concave path whose notch holds the dot does not cover it
+  none(
+    doc(
+      `<circle cx="50" cy="50" r="2" fill="#000000"/><path d="M10 10L90 10L90 90L70 90L70 30L30 30L30 90L10 90z" fill="#777777"/>`,
+    ),
+  );
+});
+test("HIDE a mark seen through a later stroke's unpainted inside is not covered", () => {
+  const out = issuesOf(
+    doc(
+      `<circle cx="50" cy="50" r="2" fill="#000000"/><rect x="44" y="44" width="12" height="12" fill="none" stroke="#777777" stroke-width="10"/>`,
+    ),
+  );
+  assert.ok(!out.some((i) => /covered/.test(i)), JSON.stringify(out));
+});
+test("HIDE a shape's own stroke over its fill is not a hide", () => {
+  none(
+    doc(
+      `<circle cx="50" cy="50" r="2" fill="#777777" stroke="#000000" stroke-width="6"/>`,
+    ),
+  );
+});
+test("HIDE a later layer that paints nothing in a theme hides nothing there", () => {
+  const style = darkRules(`rect[fill="#777777"]{fill:none}`);
+  const out = issuesOf(
+    doc(
+      `<circle cx="50" cy="50" r="2" fill="#000000"/><rect x="40" y="40" width="20" height="20" fill="#777777"/>`,
+      { style },
+    ),
+  );
+  has(out, /^light: circle fill is covered by a rect/);
+  assert.ok(
+    !out.some((i) => /^dark: circle fill is covered/.test(i)),
+    String(out),
+  );
+});
+
+// ---- review: a full-canvas rect drawn after content is not the page ---------------------------
+
+test("PAGE a full-canvas rect drawn after a mark is not the page: the page under the mark is assumed", () => {
+  const out = audit(
+    svg({
+      style: "",
+      bg: "",
+      body: `<line x1="10" y1="50" x2="90" y2="50" stroke="#000000"/>${CANVAS("#ffffff")}`,
+    }),
+  );
+  has([...out], /^light: line stroke is covered by a rect drawn after it/);
+  has([...out], /^light: rect fill #ffffff at 1\.00:1 \(marks need 3:1\)/);
+  assert.ok(
+    out.notes.some((n) => /no background rect/.test(n)),
+    JSON.stringify(out.notes),
+  );
+});
+test("PAGE a canvas rect drawn first is still the page, in the theme where it paints", () => {
+  const out = audit(svg({ style: "", bg: CANVAS("#ffffff"), body: "" }));
+  assert.deepEqual([...out], []);
+  assert.deepEqual(out.notes, []);
+});
+
+// ---- review: a bordered chip with text inside is a figure box ----------------------------------
+
+test("CHIP a bordered 20px chip with text inside holds the figure-box floor", () => {
+  for (const [w, h] of [
+    [60, 20],
+    [30, 16],
+  ])
+    has(
+      issuesOf(
+        doc(
+          `<rect x="10" y="40" width="${w}" height="${h}" fill="#f3f6fb" stroke="#1c2330"/><text x="13" y="${40 + h - 4}" font-size="10" fill="#1c2330">ab</text>`,
+        ),
+      ),
+      /^"ab" is 10px inside a figure box \(floor 11px\)/,
+    );
+});
+test("CHIP an unstroked cell with text inside is not a figure box", () => {
+  none(
+    doc(
+      `<rect x="10" y="40" width="60" height="20" fill="#f3f6fb"/><text x="13" y="56" font-size="10" fill="#1c2330">ab</text>`,
+    ),
+  );
+});
+
+// ---- sweep: a page-coloured stroke has no exemption --------------------------------------------
+
+test("STROKE a white stroke-only polyline on the white page fails, with or without a fill under it", () => {
+  has(
+    issuesOf(
+      doc(
+        `<polyline points="10,10 50,50 90,10" fill="none" stroke="#ffffff"/>`,
+      ),
+    ),
+    /^light: polyline stroke #ffffff at 1\.00:1/,
+  );
+  has(
+    issuesOf(
+      doc(
+        `<circle cx="50" cy="50" r="6" fill="#000000" stroke="#ffffff" stroke-width="2"/>`,
+      ),
+    ),
+    /^light: circle stroke #ffffff at 1\.00:1/,
+  );
+});
+
+// ---- sweep: a dark rule may set a property other than its selector's attribute ------------------
+
+test("DARK a rule selecting on fill that sets stroke recolours the stroke (CSS attribute selector)", () => {
+  const dot = `<circle cx="50" cy="50" r="6" fill="#808080" stroke="#000000" stroke-width="2"/>`;
+  const page = `rect[fill="#ffffff"]{fill:#0d1117}`;
+  has(
+    issuesOf(doc(dot, { style: darkRules(page) })),
+    /^dark: circle stroke #000000 at/,
+  );
+  none(
+    doc(dot, {
+      style: darkRules(`${page}circle[fill="#808080"]{stroke:#e2e7ec}`),
+    }),
+  );
 });

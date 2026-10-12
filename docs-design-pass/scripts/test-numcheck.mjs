@@ -450,3 +450,35 @@ test("SUP an exponent is part of the unit: 10 m² -> 10 m is a change", () => {
   assert.equal(r.status, 1, r.stdout + r.stderr);
   assert.match(r.stdout, /ADDED 10m(\s|$)/);
 });
+
+// ---- review: Unicode vulgar fractions are numbers -------------------------------------------
+
+const FRACTIONS = [..."½⅓⅔¼¾⅕⅖⅗⅘⅙⅚⅐⅛⅜⅝⅞⅑⅒↉"];
+for (const [a, b, added] of [
+  ["½ ms", "¼ ms", "¼ms"],
+  ["1½ ms", "1¼ ms", "1¼ms"],
+  ["1½ ms", "1 ms", "1ms"],
+  ["½ ms", "½ s", "½s"],
+  ["⅔ of the runs", "⅓ of the runs", "⅓"],
+  ["−½", "½", "½here"],
+  ["1⁄2 ms", "1⁄4 ms", "1⁄4ms"],
+  ["1⁄2 ms", "1 ms", "1ms"],
+]) {
+  test(`FRAC "${a}" -> "${b}" is an added number`, () => {
+    const r = edit(`it took ${a} here\n`, `it took ${b} here\n`);
+    assert.equal(r.status, 1, r.stdout + r.stderr);
+    assert.match(r.stdout, new RegExp(`ADDED (\\S+ )*${added}( |$)`, "m"));
+  });
+}
+test("FRAC every vulgar fraction is a number", () => {
+  for (const f of FRACTIONS) {
+    const r = edit("took a while\n", `took ${f} h\n`);
+    assert.equal(r.status, 1, `${f}: ${r.stdout}${r.stderr}`);
+    assert.match(r.stdout, new RegExp(`ADDED ${f}h$`, "m"), f);
+  }
+});
+test("FRAC an unchanged ½ ms, 1½ h and 1⁄2 ms are unchanged", () => {
+  const r = edit("½ ms, 1½ h, 1⁄2 ms\n", "1⁄2 ms then 1½ h then ½ ms\n");
+  assert.equal(r.status, 0, r.stdout + r.stderr);
+  assert.match(r.stdout, /unchanged numbers/);
+});
