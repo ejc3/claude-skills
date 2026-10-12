@@ -8,7 +8,7 @@ description: Use when asked to compare an app's experience with Apple's Human In
 The reader is the app's owner, deciding what to fix first. For a website or web app, in
 mobile Safari, Chrome or both, read `web.md` as well: it sets which sources and rules apply
 on the web, how to capture real browsers, and the web checklist. Every finding names the rule,
-cites the Apple source it came from, points at the line of code, and says exactly what to
+cites the authoritative source it came from, points at the line of code, and says exactly what to
 change. A finding that is the reviewer's own judgment says so. Nothing is pushed, opened or
 merged without the user's go-ahead for that step.
 
@@ -52,7 +52,8 @@ reviewer must not edit files.
 
 Each reviewer gets the same skeleton, filled in for its area:
 
-- **Role and date:** "a senior Apple-platform design researcher; today is <date>".
+- **Role and date:** "a senior <platform> design researcher; today is <date>", naming the
+  area's platform (Apple, the web on iOS, the web on Android, accessibility).
 - **Research instruction:** research what is current for the named releases and verify
   claims against authoritative sources, citing URLs:
   - the HIG pages at developer.apple.com/design/human-interface-guidelines (each page also
@@ -71,15 +72,16 @@ Each reviewer gets the same skeleton, filled in for its area:
 - **The app:** one paragraph on what it is and does.
 - **The area:** the exact files (with the main types in each), the screenshots by
   absolute path, and any known bug visible in them, so it is not "discovered" again.
-- **What to evaluate**, from the checklist (§4) parts that apply, plus "note what works
-  well". Ask for functional defects too: a design reviewer reading window code found a bug
+- **What to evaluate**, from the checklist that fits the area (§4 for a native area,
+  web.md's for a web one) parts that apply, plus "note what works well". Ask for functional defects too: a design reviewer reading window code found a bug
   where a second window stole the first one's web view.
 - **Deliverable:** ONE complete report as the final message, also written to the one
   report file named in the brief (the only file the reviewer may write).
   - A short verdict, then findings ranked by impact, each with severity (must-fix,
     should-fix or nice), the rule with its source URL, the exact file:line, and the
     concrete change (the API or modifier).
-  - "Verified from Apple source" kept separate from "your judgment".
+  - "Verified from source" (Apple, W3C, the browser vendor, as the area's sources allow)
+    kept separate from "your judgment".
   - A word cap (about 900).
   - "Do not modify any file except your report."
 
