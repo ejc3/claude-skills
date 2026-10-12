@@ -64,31 +64,34 @@ Each reviewer gets the same skeleton, filled in for its area:
 - **What to evaluate**, from the checklist (§4) parts that apply, plus "note what works
   well". Ask for functional defects too: a design reviewer reading window code found a bug
   where a second window stole the first one's web view.
-- **Deliverable:** ONE complete report as the final message, also written to a named file.
+- **Deliverable:** ONE complete report as the final message, also written to the one
+  report file named in the brief (the only file the reviewer may write).
   - A short verdict, then findings ranked by impact, each with severity (must-fix,
     should-fix or nice), the rule with its source URL, the exact file:line, and the
     concrete change (the API or modifier).
   - "Verified from Apple source" kept separate from "your judgment".
   - A word cap (about 900).
-  - "Do not modify any files."
+  - "Do not modify any file except your report."
 
 ## 4. Checklist
 
 Pick what applies to the area:
 
 - **Materials:**
-  - Liquid Glass (iOS and macOS 26 and later) is for controls floating above content,
-    never the content layer.
+  - Liquid Glass (iOS and macOS 26 and later) is for controls floating above content, not
+    the content layer, except transient interactive elements such as a slider or toggle
+    while it is being used.
   - The regular variant suits text-heavy elements.
   - Group adjacent glass in a `GlassEffectContainer`.
   - Older OS versions keep a standard material.
 - **Layout:**
   - Safe areas, the home indicator, the keyboard, landscape, size classes, iPad
     multitasking, resizable iPhone apps.
-  - Controls placed where the comparable Apple app puts them. On iPhone, primary controls
-    and search sit at the bottom.
-- **Targets:** at least 44×44 pt hit regions (`.frame(minWidth: 44, minHeight: 44)` with a
-  `.contentShape`).
+  - Controls placed where the comparable Apple app puts them. Search placement depends on
+    the screen and task: Apple prefers the bottom on iPhone when there is room, but allows
+    a top toolbar or inline search.
+- **Targets:** hit regions of at least 44×44 pt (60×60 pt on visionOS), e.g.
+  `.frame(minWidth: 44, minHeight: 44)` with a `.contentShape`.
 - **Accessibility:**
   - VoiceOver: labels on icon-only buttons; `Button` rather than `onTapGesture`; selected
     and updating traits; element grouping that keeps a destructive control separate;
@@ -108,8 +111,9 @@ Pick what applies to the area:
   - Permission prompts only when the feature is used, specific purpose strings, a denied
     state that points to Settings.
 - **Sheets and alerts:**
-  - A sheet is `NavigationStack { Form }` with `.cancellationAction` and
-    `.confirmationAction`.
+  - A modal editing sheet is typically `NavigationStack { Form }` with
+    `.cancellationAction` and `.confirmationAction` toolbar items; nonmodal and simple
+    sheets need not follow that shape.
   - Destructive actions that cannot be undone get a confirmation dialog.
   - Alerts never time out on their own.
   - Titles say what happens; button titles are verbs.
@@ -163,8 +167,9 @@ If asked to fix:
 
 - **Physical device:**
   - `xcrun devicectl device capture screenshot` works while the device is unlocked.
-  - `devicectl` needs `DEVELOPER_DIR` pointing at Xcode.app; otherwise `xcrun` reports
-    "unable to find utility".
+  - `devicectl` comes with Xcode. When the selected developer directory is the Command
+    Line Tools, `xcrun` reports "unable to find utility": select Xcode with `xcode-select`,
+    or set `DEVELOPER_DIR` for one command.
   - XCUITest on a physical device needs Settings → Developer → Enable UI Automation. The
     first run then asks for the device passcode on the device, and the runner fails with
     "Timed out while enabling automation mode" until it is entered.
@@ -172,5 +177,7 @@ If asked to fix:
   - `screencapture` over SSH fails with "could not create image from display" while the
     Mac is locked.
   - Sending keystrokes with `osascript` needs Accessibility permission.
-- **A web view's focus:** injected JavaScript runs as a user gesture, so an injected
-  `focus()` raises the iOS keyboard. No public API prevents it.
+- **A web view's focus:** depending on the API and the OS, JavaScript injected with
+  `evaluateJavaScript` or `callAsyncJavaScript` can count as a user gesture, so an injected
+  `focus()` may raise the iOS keyboard. `inputmode="none"` on the field suppresses it for
+  fields you control; test on a device.

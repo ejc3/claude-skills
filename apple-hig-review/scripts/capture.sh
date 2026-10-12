@@ -9,9 +9,10 @@
 set -eu
 target="${1:?usage: capture.sh device|simulator|mac <out.png>}"
 out="${2:?usage: capture.sh device|simulator|mac <out.png>}"
-export DEVELOPER_DIR="${DEVELOPER_DIR:-/Applications/Xcode.app/Contents/Developer}"
-raw="$(mktemp -t hig-capture).png"
-trap 'rm -f "$raw"' EXIT
+# devicectl and simctl come with Xcode: select it with xcode-select, or set DEVELOPER_DIR.
+dir="$(mktemp -d -t hig-capture)"
+raw="$dir/raw.png"
+trap 'rm -rf "$dir"' EXIT
 
 case "$target" in
 device)
