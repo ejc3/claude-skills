@@ -1653,3 +1653,130 @@ test("Z1 auditSvg returns an array for hundreds of random mutations of a chart, 
     assert.ok(Array.isArray(out) && Array.isArray(out.notes), `mutation ${n}`);
   }
 });
+
+// ---- closure review 4: generator-emittable constructs ----------------------------------------
+
+test("C4-01 a self-intersecting filled path is unsupported", () => {
+  has(
+    issuesOf(doc(`<path d="M10 10L90 90L10 90L90 10Z" fill="#aaaaaa"/>`)),
+    /^unsupported self-intersecting fill on <path>/,
+  );
+  // a simple outline is still audited
+  has(
+    issuesOf(doc(`<path d="M10 10L90 10L90 90L10 90Z" fill="#aaaaaa"/>`)),
+    /^light: path fill #aaaaaa at 2\.32:1/,
+  );
+});
+test("C4-02 inner NBSPs keep their width: the glyph after them is covered", () => {
+  has(
+    issuesOf(
+      doc(
+        `<text x="0" y="20" font-size="20" fill="#000000">A&#160;&#160;&#160;&#160;&#160;&#160;A</text><rect x="40" width="40" height="30" fill="#000000"/>`,
+        { h: 50 },
+      ),
+    ),
+    /^light: "A +A" is covered by a rect drawn after it/,
+  );
+});
+test("C4-02 leading or trailing NBSP, and a newline inside text, are unsupported (renderers differ)", () => {
+  for (const s of ["&#160;A", "A&#160;", "A&#8239;"])
+    has(
+      issuesOf(
+        doc(`<text x="10" y="20" font-size="12" fill="#000000">${s}</text>`),
+      ),
+      /^unsupported leading or trailing non-collapsible space in text/,
+    );
+  has(
+    issuesOf(
+      doc(`<text x="10" y="20" font-size="12" fill="#000000">A\nB</text>`),
+    ),
+    /^unsupported line break inside text/,
+  );
+  // spaces and newlines around the text are stripped by every renderer
+  none(
+    doc(`<text x="10" y="20" font-size="12" fill="#000000">\n  A  B\n</text>`),
+  );
+});
+test("C4-03 a stroke drawn before a translucent rect is under it, not over it", () => {
+  has(
+    issuesOf(
+      doc(
+        `<line y1="20" x2="100" y2="20" stroke="#000000" stroke-width="40"/><rect width="100" height="100" fill="#ffffff80"/><text x="10" y="25" font-size="16" fill="#757575">X</text>`,
+      ),
+    ),
+    /^light: "X" #757575 at 1\.17:1/,
+  );
+});
+test("C4-04 a weight over 500 is set in bold: weight 550 uses bold widths", () => {
+  has(
+    issuesOf(
+      doc(
+        `<text x="0" y="20" font-size="20" font-weight="550" fill="#000000">llllll</text><rect x="34" width="16" height="30" fill="#000000"/>`,
+        { h: 50 },
+      ),
+    ),
+    /^light: "llllll" is covered by a rect drawn after it/,
+  );
+});
+test("C4-05 a character outside the measured glyph table is unsupported", () => {
+  has(
+    issuesOf(
+      doc(
+        `<text x="20" y="110" font-size="100" fill="#000000">&#7858;</text><rect width="100" height="9" fill="#000000"/>`,
+        { w: 150, h: 150 },
+      ),
+    ),
+    /^unsupported character U\+1EB2 in text/,
+  );
+});
+test("C4-07 attribute values and style text are XML-normalized before matching", () => {
+  const ink = `<text x="10" y="20" font-size="12" fill="#000000">A</text>`;
+  has(
+    issuesOf(
+      doc(ink, { style: darkRules(`text[fill="&#35;000000"]{fill:#ffffff}`) }),
+    ),
+    /^dark: "A" #ffffff at 1\.00:1/,
+  );
+  has(
+    issuesOf(
+      doc(`<text x="10" y="20" font-size="12" fill="\n#000000">A</text>`, {
+        style: darkRules(`text[fill=" #000000"]{fill:#ffffff}`),
+      }),
+    ),
+    /^dark: "A" #ffffff at 1\.00:1/,
+  );
+});
+test("C4-10 width and height must equal the viewBox exactly", () => {
+  const s = `<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10" viewBox="0 0 10.5 10.5" ${FONT}><rect width="10.5" height="10.5" fill="#ffffff"/><text x="1" y="9" font-size="9" fill="#000000">I</text></svg>`;
+  has(issuesOf(s), /^unsupported viewBox scaling/);
+});
+test("C4-12 invalid legacy colour functions are unsupported", () => {
+  for (const c of ["rgb(0%,0,0)", "hsl(0,0,0)", "rgba(0,0%,0,1)"])
+    has(
+      issuesOf(doc(`<rect x="10" y="10" width="20" height="20" fill="${c}"/>`)),
+      new RegExp(
+        `^unsupported fill="${c.replace(/[()%]/g, "\\$&")}" on <rect>`,
+      ),
+    );
+  // the valid forms are read
+  for (const c of ["rgb(0,0,0)", "rgb(0%,0%,0%)", "hsl(0,0%,0%)", "hsl(0 0 0)"])
+    none(doc(`<rect x="10" y="10" width="20" height="20" fill="${c}"/>`));
+});
+test("C4-15 names that are object properties are unsupported, not crashes or passes", () => {
+  has(issuesOf(doc(`<constructor/>`)), /^unsupported <constructor>/);
+  has(
+    issuesOf(doc("", { root: ` __proto__="x"` })),
+    /^unsupported attribute __proto__ on <svg>/,
+  );
+  for (const d of ["constructor:x", "__proto__:x"])
+    has(
+      issuesOf(doc("", { root: ` style="${d}"` })),
+      new RegExp(`^unsupported CSS declaration "${d}"`),
+    );
+  has(
+    issuesOf(
+      doc(`<rect x="1" y="1" width="9" height="9" fill="constructor"/>`),
+    ),
+    /^unsupported fill="constructor" on <rect>/,
+  );
+});

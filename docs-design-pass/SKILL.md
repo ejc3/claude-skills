@@ -194,7 +194,8 @@ in a default install. The scripts live in `<skill-dir>/scripts/`, apart from any
   elements, attributes, values and dark-mode stylesheet form a chart generator
   emits: rects, circles, lines, polylines, M/L/H/V/Z paths, plain text,
   `translate()`, no opacity) and reports anything else as an issue; text widths
-  are bounded by Arial plus 10% and DejaVu Sans, measured per glyph.
+  are bounded by Arial plus 10% and DejaVu Sans, measured per glyph. It is a
+  lint for SVG your own generators emit, not a validator for untrusted input.
   `node <skill-dir>/scripts/svg-audit.mjs [--min-text 9] [--min-box-text 11] [--grid-color '#e4e8ec'] *.svg`,
   or import `auditSvg` into the repo's test. Exit 1 on any issue, 2 on a usage
   or read error; `-h` prints usage.
