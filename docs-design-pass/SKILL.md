@@ -136,8 +136,10 @@ its markers fails the generator.
    - For prose: a codex fact-check of every changed sentence against the data,
      and a **cross-doc concision editor** that assigns an owner to every finding
      retold across docs and returns exact replacements with word savings.
+
    Deduplicate, classify each finding (blocks this PR / stacked follow-up),
    and fix the batch in one repair.
+
 2. **What closes a finding** (the one definition; the merge gate reuses it).
    A defect is closed by a red test observed failing on the pre-repair code: a
    kit self-test, an SVG audit over every committed chart, a source-level
