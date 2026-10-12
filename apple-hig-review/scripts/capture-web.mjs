@@ -43,7 +43,7 @@ function device(...names) {
 }
 
 const profiles = [
-  { name: "webkit-iphone", engine: webkit, context: device("iPhone 15", "iPhone 14", "iPhone 13"),
+  { name: "webkit-iphone", engine: webkit, context: device("iPhone 17", "iPhone 16", "iPhone 15", "iPhone 14"),
     variants: [{ colorScheme: "light" }, { colorScheme: "dark" }, { colorScheme: "light", reducedMotion: "reduce" }] },
   { name: "webkit-iphone-se", engine: webkit, context: device("iPhone SE (3rd gen)"),
     variants: [{ colorScheme: "light" }] },
@@ -59,12 +59,12 @@ const profiles = [
 const place = { locale: process.env.CAPTURE_LOCALE || "en-US",
   ...(process.env.CAPTURE_TZ ? { timezoneId: process.env.CAPTURE_TZ } : {}) };
 
-// A name per URL that differs whenever the URLs do: host, path and query.
+// A file name per URL: its position in the argument list keeps names distinct, and a short
+// piece of the path keeps them readable. The host and query stay out: a query can carry a
+// token or an account id, and a file name travels with a shared screenshot.
 function slug(url, index) {
-  const u = new URL(url);
-  const base = `${u.pathname}${u.search}`.replace(/[^a-z0-9]+/gi, "-").replace(/^-|-$/g, "") || "home";
-  const hosts = new Set(urls.map((x) => new URL(x).host));
-  return `${String(index + 1).padStart(2, "0")}-${hosts.size > 1 ? `${u.host.replace(/[^a-z0-9]+/gi, "-")}-` : ""}${base}`;
+  const path = new URL(url).pathname.replace(/[^a-z0-9]+/gi, "-").replace(/^-|-$/g, "").slice(0, 40);
+  return `${String(index + 1).padStart(2, "0")}-${path || "home"}`;
 }
 
 let failures = 0;

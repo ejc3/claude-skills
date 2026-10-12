@@ -118,8 +118,8 @@ Pick what applies to the area.
     "saved", an error summary) reach assistive technology without moving focus (4.1.3).
     A live score is not a status message under 4.1.3; announcing it is judgment, and
     should be polite and rate-limited.
-  - A visible focus indicator (2.4.7). Dialogs trap focus and return it on close (APG
-    dialog pattern).
+  - A visible focus indicator (2.4.7). A modal dialog keeps focus inside it and returns it on
+    close (APG modal dialog pattern); a nonmodal one lets focus move to the rest of the page.
   - Hover-only affordances do not exist on touch; gate them with `@media (hover: hover)`.
 - **Forms:** correct `type`, `autocomplete` tokens (1.3.5) and `inputmode` so the right
   keyboard appears; `enterkeyhint` where the return key's label matters; an input error
@@ -136,7 +136,10 @@ Pick what applies to the area.
   bar, a lock, a system alert, a share sheet). Use the real ones: `alert`/`confirm` sparingly,
   the Web Share API for sharing.
 - **Performance, as users feel it:** web.dev's Core Web Vitals thresholds (LCP 2.5 s, INP
-  200 ms, CLS 0.1), measured on a phone-class profile. Layout shift is also a design bug.
+  200 ms, CLS 0.1) are judged on field data, the 75th percentile of real visits (the Chrome
+  UX Report or the site's own measurements). A lab run on a phone-class profile can point at
+  a cause but cannot pass or fail a page, and cannot measure INP. Layout shift is also a
+  design bug.
 - **Comparable apps:** compare with how the same task feels in Safari's own UI and a
   well-made native app for the domain on each platform, as in the native review.
 
