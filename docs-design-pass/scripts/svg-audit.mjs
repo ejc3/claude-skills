@@ -29,16 +29,20 @@
 // (the legacy comma form only as CSS Color 4 defines it).
 // Input past fixed limits (size, element count, nesting, list length) is "too large".
 //
-// One paint stack, in document order. Backdrops come from rects: a text's or mark's
-// backdrop is every colour the rects painted before it composite to over the region it
-// paints (each region of the plane cut by the rects' edges is composited on its own, so
-// the darkest and the lightest backdrop both count), over the theme's default page.
-// The page is the run of full-canvas rect fills drawn before anything else; a
-// full-canvas rect drawn after content is an ordinary rect over it.
+// One paint stack, in document order. Backdrops come from rects (square or rounded) and
+// circles: a text's or mark's backdrop is every colour those fills painted before it
+// composite to over the region it paints (each region of the plane cut by their edges is
+// composited on its own, so the darkest and the lightest backdrop both count), over the
+// theme's default page. Each shape kind has one area geometry that every check reads
+// (the page, backdrops, text frames, figure boxes, collisions, covers): a rounded rect's
+// corners and a circle's arc are outside it.
+// The page is the run of rect or circle fills that cover the whole canvas, drawn before
+// anything else; one drawn after content is an ordinary shape over it.
 // A stroke drawn before a text under its glyphs is composited both ways, except a grid
-// hairline; a mark is not checked against other marks' strokes under it (marks that
-// cross); a stroke's own element's fill is part of its backdrop. A filled circle, path
-// or polyline drawn before a text or mark it overlaps is an issue (its coverage is not
+// hairline (one horizontal or vertical segment at most 1px wide, stroked in the grid
+// colour); a mark is not checked against other marks' strokes under it (marks that
+// cross); a stroke's own element's fill is part of its backdrop. A filled path or
+// polyline drawn before a text or mark it overlaps is an issue (its coverage is not
 // modelled), as is anything painted after a text over its glyphs, and any one shape
 // painted after a mark over all of it (a fill, or a stroke's band; partial overlap is
 // marks that cross).
@@ -55,11 +59,12 @@
 // DejaVu Sans, sans-serif and the system UI faces (system-ui, -apple-system, Segoe UI),
 // which are taken to fall within the same bounds, not measured. Covering is
 // over-approximated where geometry is not exact: a mitred join reaches 4 half widths
-// around its vertex (the default miter limit) and a rounded rect's stroke corner is taken
-// as square. Such approximations can only add issues. Hiding is under-approximated the
-// same way: a stroke hides a mark only within one segment's band, a circle's ring or a
-// rect's band with its inside taken square, so a mark hidden only by a join, a cap or
-// several shapes together is not reported.
+// around its vertex (the default miter limit), a rounded rect's stroke corner is taken
+// as square, and inside a rect with elliptical corners (rx clamped unequally) only its
+// two straight arms count as clear of its stroke. Such approximations can only add
+// issues. Hiding is under-approximated the same way: a stroke hides a mark only within
+// one segment's band, a circle's ring or a rect's band with its inside taken square, so a
+// mark hidden only by a join, a cap or several shapes together is not reported.
 //
 // auditSvg returns the issue strings; `.notes` on the returned array lists the
 // assumptions made (for example the page colour used when the SVG draws no background).
@@ -391,7 +396,7 @@ const SHAPES = new Map(
     line: ["stroke"],
   }),
 );
-// shapes whose grid-coloured stroke is a gridline or rule
+// shapes whose grid-coloured stroke can be a gridline or rule
 const HAIRLINES = new Set(["line", "path", "polyline"]);
 // initial values of the properties read
 const INITIAL = {
@@ -892,6 +897,62 @@ const bandMeets = (a, b, d, e0, e1, box) => {
   }
   return true;
 };
+
+// ---- one fill geometry per shape kind. Every predicate that asks where a shape's area is
+// (the page, backdrops, frames and figure boxes, collisions, covers) reads it through
+// FILL[kind]: contains(g, p) (the point is inside, boundary included), meets(g, b) (paints
+// inside box b over a positive area), holds(g, b) (paints all of b), and, for the kinds a
+// backdrop is composited from, area(g) and cuts(g) (x and y lines that cut the plane into
+// cells each wholly inside, wholly outside, or crossed by a curved edge).
+const discHolds = (g, b) =>
+  corners(b).every((p) => Math.hypot(p[0] - g.c[0], p[1] - g.c[1]) <= g.r);
+const FILL = {
+  rect: {
+    contains: (g, [x, y]) => inRect(g, x, y),
+    meets: rectMeets,
+    holds: rectHolds,
+    area: (g) => g.w * g.h - (4 - Math.PI) * g.rx * g.ry,
+    cuts: ({ box, rx, ry }) => [
+      [box[0], box[2], box[0] + rx, box[2] - rx],
+      [box[1], box[3], box[1] + ry, box[3] - ry],
+    ],
+  },
+  circle: {
+    contains: (g, [x, y]) => Math.hypot(x - g.c[0], y - g.c[1]) <= g.r,
+    meets: (g, b) => discMeets(g.c, g.r, b),
+    holds: discHolds,
+    area: (g) => Math.PI * g.r * g.r,
+    // its box and the inscribed square
+    cuts: ({ box, c, r }) => {
+      const k = r / Math.SQRT2;
+      return [
+        [box[0], box[2], c[0] - k, c[0] + k],
+        [box[1], box[3], c[1] - k, c[1] + k],
+      ];
+    },
+  },
+  poly: {
+    meets: polyMeets,
+    holds: polyHolds,
+  },
+};
+// does the part of a rect at least d inside its edge hold box b? Exact for circular corners
+// (rx = ry: the rect shrunk by d, corner radius rx - d); for elliptical ones (rx and ry
+// clamped apart) a part of it: the two straight arms, each shrunk by d
+const rectInnerHolds = ({ box: [x0, y0, x1, y1], rx, ry }, d, b) =>
+  (rx === ry
+    ? [{ box: [x0 + d, y0 + d, x1 - d, y1 - d], r: Math.max(0, rx - d) }]
+    : [
+        { box: [x0 + rx + d, y0 + d, x1 - rx - d, y1 - d], r: 0 },
+        { box: [x0 + d, y0 + ry + d, x1 - d, y1 - ry - d], r: 0 },
+      ]
+  ).some(
+    ({ box: i, r }) =>
+      i[0] < i[2] && i[1] < i[3] && rectHolds({ box: i, rx: r, ry: r }, b),
+  );
+// the kinds a backdrop is composited from, and so the kinds that can be the page, frame a
+// text or be a figure box; a filled path or polyline under a text or mark is not modelled
+const AREA_KINDS = new Set(["rect", "circle"]);
 
 // path data of straight segments → { subpaths: [{ pts, closed }] }, else { bad }
 const parsePath = (d) => {
@@ -1469,10 +1530,7 @@ export function auditSvg(
   // does the shape's fill paint inside box b?
   const fillMeets = (e, b) => {
     const g = geom(e);
-    if (!g.box || !g.area) return false;
-    if (g.kind === "rect") return rectMeets(g, b);
-    if (g.kind === "circle") return discMeets(g.c, g.r, b);
-    return polyMeets(g, b);
+    return g.box !== null && g.area && FILL[g.kind].meets(g, b);
   };
   // the stroke's shape: its caps and joins, and how far it reaches past its geometry
   const strokeForm = (e, theme) =>
@@ -1503,17 +1561,7 @@ export function auditSvg(
     if (!r || !overlaps(r, b)) return false;
     const g = geom(e);
     const d = half(e, theme);
-    if (g.kind === "rect") {
-      const inner = [g.box[0] + d, g.box[1] + d, g.box[2] - d, g.box[3] - d];
-      return !(
-        inner[0] < inner[2] &&
-        inner[1] < inner[3] &&
-        rectHolds(
-          { box: inner, rx: Math.max(0, g.rx - d), ry: Math.max(0, g.ry - d) },
-          b,
-        )
-      );
-    }
+    if (g.kind === "rect") return !rectInnerHolds(g, d, b);
     if (g.kind === "circle")
       return (
         discMeets(g.c, g.r + d, b) &&
@@ -1561,13 +1609,7 @@ export function auditSvg(
     if (!r || b[0] < r[0] || b[1] < r[1] || b[2] > r[2] || b[3] > r[3])
       return false;
     const g = geom(e);
-    const inDisc = (c, rad) =>
-      corners(b).every((p) => Math.hypot(p[0] - c[0], p[1] - c[1]) <= rad);
-    if (ch === "fill") {
-      if (g.kind === "rect") return rectHolds(g, b);
-      if (g.kind === "circle") return inDisc(g.c, g.r);
-      return polyHolds(g, b);
-    }
+    if (ch === "fill") return FILL[g.kind].holds(g, b);
     const d = half(e, theme);
     if (g.kind === "rect") {
       const round = g.rx > 0;
@@ -1583,7 +1625,7 @@ export function auditSvg(
       );
     }
     if (g.kind === "circle")
-      return inDisc(g.c, g.r + d) && toBox(g.c, b) >= g.r - d;
+      return discHolds({ c: g.c, r: g.r + d }, b) && toBox(g.c, b) >= g.r - d;
     const { cap } = strokeForm(e, theme);
     for (const { pts, closed } of g.subpaths) {
       const n = pts.length;
@@ -1608,20 +1650,33 @@ export function auditSvg(
     return false;
   };
 
-  const isCanvas = (e) => {
-    if (e.tag !== "rect") return false;
+  // does the shape's area cover the whole canvas (to within half a pixel at each edge)?
+  // A rounded rect leaves its corners
+  const coversCanvas = (e) => {
     const g = geom(e);
     return (
+      AREA_KINDS.has(g.kind) &&
       g.box !== null &&
-      Math.abs(g.box[0] - originX) < 0.5 &&
-      Math.abs(g.box[1] - originY) < 0.5 &&
-      Math.abs(g.w - W) < 0.5 &&
-      Math.abs(g.h - H) < 0.5
+      FILL[g.kind].holds(g, [
+        originX + 0.5,
+        originY + 0.5,
+        originX + W - 0.5,
+        originY + H - 0.5,
+      ])
     );
   };
-  // a gridline or rule: a line, path or polyline stroked in the grid colour
-  const isGridHairline = (e) => {
+  // a gridline or rule in a theme: one horizontal or vertical segment (a line, or a path or
+  // polyline of two points) at most 1px wide, stroked in the grid colour. The colour is
+  // read in light (the dark rules select it by that value); the width in the theme
+  const isGridHairline = (e, theme) => {
     if (!HAIRLINES.has(e.tag)) return false;
+    if (!(+prop(e, "stroke-width", theme) <= 1)) return false;
+    const g = geom(e);
+    if (!g.box || g.subpaths.length !== 1) return false;
+    const { pts, closed } = g.subpaths[0];
+    if (closed || pts.length !== 2) return false;
+    const [[x0, y0], [x1, y1]] = pts;
+    if ((x0 === x1) === (y0 === y1)) return false; // slanted, or no length
     const c = paintOf(e, "stroke", "light").color;
     return c !== null && c.rgb.every((v, i) => v === grid.rgb[i]);
   };
@@ -1638,16 +1693,19 @@ export function auditSvg(
       unsupported(`self-intersecting fill on <${e.tag}>`);
   const texts = drawn.filter((e) => e.tag === "text");
 
-  // ---- backdrops: the rects painted before an element, over the region it paints
-  // (region: { box, meets(b) }). Each cell of the plane cut by those rects' edges (and
-  // their corner radii) inside the region is composited on its own; a cell a rounded
-  // corner crosses counts with and without that rect.
-  const rectFills = Object.fromEntries(
+  // ---- backdrops: the rect and circle fills painted before an element, over the region it
+  // paints (region: { box, meets(b), parts(b) }: parts are the boxes of b the element
+  // paints in). Each cell of the plane cut by those shapes' cuts inside the region is
+  // composited on its own; a shape that meets the cell's parts without holding them all (a
+  // rounded corner or an arc crosses them) counts with and without its colour.
+  const areaFills = Object.fromEntries(
     THEMES.map((t) => [
       t,
       shapes.filter(
         (e) =>
-          e.tag === "rect" && geom(e).box && paintOf(e, "fill", t).alpha > 0,
+          AREA_KINDS.has(geom(e).kind) &&
+          geom(e).box &&
+          paintOf(e, "fill", t).alpha > 0,
       ),
     ]),
   );
@@ -1656,7 +1714,7 @@ export function auditSvg(
       t,
       shapes.filter(
         (e) =>
-          e.tag !== "rect" &&
+          !AREA_KINDS.has(geom(e).kind) &&
           SHAPES.get(e.tag).includes("fill") &&
           geom(e).area &&
           paintOf(e, "fill", t).alpha > 0,
@@ -1667,7 +1725,7 @@ export function auditSvg(
   // composited in paint order both ways, over the cells it reaches
   const backdrop = (theme, ord, region, strokes = []) => {
     const rs = [];
-    for (const r of rectFills[theme]) {
+    for (const r of areaFills[theme]) {
       if (r.ord >= ord) break;
       if (overlaps(geom(r).box, region.box) && region.meets(geom(r).box))
         rs.push(r);
@@ -1681,11 +1739,9 @@ export function auditSvg(
     const xs = new Set([bx0, bx1]);
     const ys = new Set([by0, by1]);
     for (const r of rs) {
-      const { box, rx, ry } = geom(r);
-      for (const x of [box[0], box[2], box[0] + rx, box[2] - rx])
-        if (x > bx0 && x < bx1) xs.add(x);
-      for (const y of [box[1], box[3], box[1] + ry, box[3] - ry])
-        if (y > by0 && y < by1) ys.add(y);
+      const [cx, cy] = FILL[geom(r).kind].cuts(geom(r));
+      for (const x of cx) if (x > bx0 && x < bx1) xs.add(x);
+      for (const y of cy) if (y > by0 && y < by1) ys.add(y);
     }
     const X = [...xs].sort((a, b) => a - b);
     const Y = [...ys].sort((a, b) => a - b);
@@ -1695,14 +1751,19 @@ export function auditSvg(
       for (let j = 0; j + 1 < Y.length; j++) {
         const cell = [X[i], Y[j], X[i + 1], Y[j + 1]];
         if (!region.meets(cell)) continue;
+        const parts = region.parts(cell);
         let layers = [FALLBACK_PAGE[theme]];
         for (const { e, ch } of order) {
           const g = geom(e);
           const c = paintOf(e, ch, theme).color;
-          if (ch === "fill" && rectHolds(g, cell))
+          if (ch === "fill" && parts.every((p) => FILL[g.kind].holds(g, p)))
             layers = layers.map((l) => over(c, l));
           else if (
-            ch === "fill" ? rectMeets(g, cell) : strokeMeets(e, cell, theme)
+            parts.some((p) =>
+              ch === "fill"
+                ? FILL[g.kind].meets(g, p)
+                : strokeMeets(e, p, theme),
+            )
           )
             layers = [...layers, ...layers.map((l) => over(c, l))];
           if (layers.length > LIMITS.layers) return null;
@@ -1778,9 +1839,9 @@ export function auditSvg(
   }
   const shownSet = new Set(shown);
   const paints = (t, theme) => paintOf(t, "fill", theme).alpha > 0;
-  // the page in a theme: the run of full-canvas rect fills drawn before anything else that
-  // paints there (a canvas rect's own stroke ends it). A full-canvas rect drawn after
-  // content is an ordinary rect that covers what is under it.
+  // the page in a theme: the run of rect and circle fills that cover the whole canvas, drawn
+  // before anything else that paints there (such a shape's own stroke ends it). One drawn
+  // after content is an ordinary shape that covers what is under it.
   const pages = Object.fromEntries(
     THEMES.map((theme) => {
       const set = new Set();
@@ -1790,7 +1851,7 @@ export function auditSvg(
             ? paints(e, theme) && content(e) !== ""
             : SHAPES.get(e.tag).some((ch) => reachBox(e, ch, theme));
         if (!painted) continue;
-        if (!isCanvas(e) || !reachBox(e, "fill", theme)) break;
+        if (!coversCanvas(e) || !reachBox(e, "fill", theme)) break;
         set.add(e);
         if (reachBox(e, "stroke", theme)) break;
       }
@@ -1838,17 +1899,37 @@ export function auditSvg(
       ]);
       return cells.length ? { cells, box: union(cells) } : null;
     });
-  // rects that carry a fill in a theme, for the figure-box floor
-  const filledRects = (theme) =>
-    shapes.filter(
-      (e) =>
-        e.tag === "rect" &&
-        !isCanvas(e) &&
-        paintOf(e, "fill", theme).alpha > 0 &&
-        geom(e).w > 3 &&
-        geom(e).h > 3,
+  // is a text anchor ([x, y], y at mid x-height) inside the shape's area, and strictly
+  // inside its box?
+  const holdsAnchor = (e, [x, y]) => {
+    const g = geom(e);
+    return (
+      g.box !== null &&
+      x > g.box[0] &&
+      x < g.box[2] &&
+      y > g.box[1] &&
+      y < g.box[3] &&
+      FILL[g.kind].contains(g, [x, y])
     );
-  const boxRects = Object.fromEntries(THEMES.map((t) => [t, filledRects(t)]));
+  };
+  // the rects and circles over 3x3 that paint (a fill, a stroke or both) in a theme and do
+  // not cover the canvas: the containers a figure box is chosen from
+  const containers = Object.fromEntries(
+    THEMES.map((theme) => [
+      theme,
+      shapes.filter((e) => {
+        const g = geom(e);
+        return (
+          AREA_KINDS.has(g.kind) &&
+          g.box !== null &&
+          g.box[2] - g.box[0] > 3 &&
+          g.box[3] - g.box[1] > 3 &&
+          !coversCanvas(e) &&
+          (reachBox(e, "fill", theme) || reachBox(e, "stroke", theme))
+        );
+      }),
+    ]),
+  );
 
   for (const t of shown) {
     const s = content(t);
@@ -1859,16 +1940,13 @@ export function auditSvg(
     for (const theme of THEMES) {
       sizeIssues[theme] = [];
       if (!paints(t, theme)) continue; // a text that paints nothing is not read
-      // a figure box: the smallest filled rect around the anchor, stroked, of any size over
-      // 3x3 (a labelled chip is a box)
+      // a figure box: the smallest container whose area holds the anchor, stroked, of any
+      // size over 3x3 (a labelled chip is a box; an outline-only frame is one too)
       let under = null;
-      for (const r of boxRects[theme]) {
-        const [x0, y0, x1, y1] = geom(r).box;
-        const ay = y - px * 0.35;
-        if (x > x0 && x < x1 && ay > y0 && ay < y1)
-          if (!under || geom(r).w * geom(r).h < geom(under).w * geom(under).h)
-            under = r;
-      }
+      const areaOf = (e) => FILL[geom(e).kind].area(geom(e));
+      for (const r of containers[theme])
+        if (holdsAnchor(r, [x, y - px * 0.35]))
+          if (!under || areaOf(r) < areaOf(under)) under = r;
       const isBox = under && paintOf(under, "stroke", theme).alpha > 0;
       const shownPx = Math.round(px * 100) / 100;
       if (px < minText)
@@ -1886,6 +1964,16 @@ export function auditSvg(
     const region = {
       box: glyphs.box,
       meets: (b) => glyphs.cells.some((c) => overlaps(c, b)),
+      // the glyph cells' parts inside b
+      parts: (b) =>
+        glyphs.cells
+          .filter((c) => overlaps(c, b))
+          .map((c) => [
+            Math.max(c[0], b[0]),
+            Math.max(c[1], b[1]),
+            Math.min(c[2], b[2]),
+            Math.min(c[3], b[3]),
+          ]),
     };
     for (const theme of THEMES) {
       if (!paints(t, theme)) continue;
@@ -1907,7 +1995,7 @@ export function auditSvg(
       const strokes = shapes.filter(
         (e) =>
           e.ord < t.ord &&
-          !isGridHairline(e) &&
+          !isGridHairline(e, theme) &&
           reachBox(e, "stroke", theme) &&
           overlaps(reachBox(e, "stroke", theme), glyphs.box) &&
           glyphs.cells.some((c) => strokeMeets(e, c, theme)),
@@ -1949,16 +2037,16 @@ export function auditSvg(
   }
 
   // ---- non-text marks: series lines, arrows and edges, dots (filled or hollow), solid
-  // bars, and small stroke-only tiles. Exempt: the fill of a page rect (a full-canvas
-  // rect drawn before anything else), rects that frame text (a container or a heat-table
-  // cell: the anchor of a text painted in that theme lies inside it; the text is measured
-  // against it instead), labeled swatches (a legend key), stripes ≤3px, hairlines drawn
-  // in the grid colour (gridlines and rules are decoration; the axis labels carry the
-  // values), and, where the same shape's stroke paints and is itself audited as a mark,
-  // the parts of its fill that composite to exactly the colour under them (a hollow dot's
-  // centre). A translucent colour is composited over each backdrop before the 3:1 check.
-  // A stroke has no exemption: a page-coloured stroke fails at 1:1 wherever the page
-  // shows beside it, a halo around a filled dot included.
+  // bars, and small stroke-only tiles. Exempt: the fill of a page shape (one covering the
+  // canvas drawn before anything else), rects and circles that frame text (a container
+  // or a heat-table cell: the anchor of a text painted in that theme lies inside its
+  // area; the text is measured against it instead), labeled swatches (a legend key),
+  // stripes ≤3px, grid hairlines (gridlines and rules are decoration; the axis labels
+  // carry the values), and, where the same shape's stroke paints and is itself audited as
+  // a mark, the parts of its fill that composite to exactly the colour under them (a
+  // hollow dot's centre). A translucent colour is composited over each backdrop before
+  // the 3:1 check. A stroke has no exemption: a page-coloured stroke fails at 1:1
+  // wherever the page shows beside it, a halo around a filled dot included.
   const anchors = Object.fromEntries(
     THEMES.map((theme) => [
       theme,
@@ -1970,12 +2058,8 @@ export function auditSvg(
         }),
     ]),
   );
-  const framesText = (e, theme) => {
-    const [x0, y0, x1, y1] = geom(e).box;
-    return anchors[theme].some(
-      ([x, y]) => x > x0 && x < x1 && y > y0 && y < y1,
-    );
-  };
+  const framesText = (e, theme) =>
+    anchors[theme].some(([x, y]) => holdsAnchor(e, [x, y]));
   // a labeled swatch (a legend key): a rect no larger than 32x20 with a rendered text
   // starting within 12px of its right edge, the baseline within 4px of its vertical
   // extent. The adjacent text carries what the graphic shows (WCAG 1.4.11).
@@ -1991,13 +2075,14 @@ export function auditSvg(
   // is a channel of a shape audited as a mark in a theme: it paints and no exemption applies
   const audited = (e, ch, theme) => {
     if (!reachBox(e, ch, theme)) return false; // paints nothing
-    if (e.tag === "rect") {
+    if (AREA_KINDS.has(e.tag)) {
       const g = geom(e);
       if (ch === "fill" && pages[theme].has(e)) return false;
-      if (!(g.w > 3 && g.h > 3)) return false;
-      if (framesText(e, theme) || isLabeledSwatch(e, theme)) return false;
+      if (e.tag === "rect" && !(g.w > 3 && g.h > 3)) return false;
+      if (framesText(e, theme)) return false;
+      if (e.tag === "rect" && isLabeledSwatch(e, theme)) return false;
     }
-    return !(ch === "stroke" && isGridHairline(e));
+    return !(ch === "stroke" && isGridHairline(e, theme));
   };
   for (const e of shapes)
     for (const ch of SHAPES.get(e.tag))
@@ -2013,7 +2098,11 @@ export function auditSvg(
           (l, lch) => l.tag !== "text" && channelHolds(l, lch, box, theme),
         ))
           out.push(coveredBy(theme, `${e.tag} ${ch}`, c));
-        const region = { box, meets: (b) => channelMeets(e, ch, b, theme) };
+        const region = {
+          box,
+          meets: (b) => channelMeets(e, ch, b, theme),
+          parts: (b) => [b],
+        };
         const other = otherFills[theme].find(
           (o) =>
             o.ord < e.ord &&

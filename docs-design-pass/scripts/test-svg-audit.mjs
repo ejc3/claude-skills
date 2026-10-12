@@ -1809,10 +1809,11 @@ test("HOLLOW a page-coloured fill whose stroke paints nothing is flagged", () =>
       /^light: circle fill #ffffff at 1\.00:1/,
     );
 });
-test("HOLLOW a page-coloured fill whose stroke is a grid hairline is flagged", () => {
+test("HOLLOW a page-coloured fill outlined in the grid colour is flagged: its outline is not a hairline", () => {
+  // a grid hairline is one open segment, which has no fill; the outline is a mark
   has(
     marks(`<path d="M10 10L60 10L60 60Z" fill="#ffffff" stroke="#e4e8ec"/>`),
-    /^light: path fill #ffffff at 1\.00:1/,
+    /^light: path stroke #e4e8ec at 1\.23:1/,
   );
 });
 test("HOLLOW a hollow dot (page-coloured fill, dark stroke) still passes in both themes", () => {
@@ -1997,4 +1998,349 @@ test("DARK a rule selecting on fill that sets stroke recolours the stroke (CSS a
       style: darkRules(`${page}circle[fill="#808080"]{stroke:#e2e7ec}`),
     }),
   );
+});
+
+// ---- review: the grid exemption needs a hairline: one straight segment at most 1px wide -------
+
+const GRID_DARK = (line = "#21262d", more = "") =>
+  darkRules(
+    `rect[fill="#ffffff"]{fill:#0d1117}line[stroke="#e4e8ec"]{stroke:${line}}path[stroke="#e4e8ec"]{stroke:${line}}polyline[stroke="#e4e8ec"]{stroke:${line}}${more}`,
+  );
+const gridIssues = (body, style = GRID_DARK()) =>
+  issuesOf(doc(body, { w: 200, h: 100, style }));
+test("GRID a 10px line, path or polyline in the grid colour is a mark in both themes", () => {
+  for (const [tag, el] of [
+    ["line", `<line x1="0" y1="50" x2="200" y2="50"`],
+    ["path", `<path d="M0 50H200" fill="none"`],
+    ["polyline", `<polyline points="0,50 200,50" fill="none"`],
+  ]) {
+    const out = gridIssues(`${el} stroke="#e4e8ec" stroke-width="10"/>`);
+    has(out, new RegExp(`^light: ${tag} stroke #e4e8ec at 1\\.23:1`));
+    has(out, new RegExp(`^dark: ${tag} stroke #21262d at 1\\.24:1`));
+  }
+});
+test("GRID a 1.5px grid-colour line is a mark; 1px, 0.5px and the default width are hairlines", () => {
+  has(
+    gridIssues(
+      `<line x1="0" y1="50" x2="200" y2="50" stroke="#e4e8ec" stroke-width="1.5"/>`,
+    ),
+    /^light: line stroke #e4e8ec at 1\.23:1/,
+  );
+  for (const w of [``, ` stroke-width="1"`, ` stroke-width="0.5"`])
+    assert.deepEqual(
+      gridIssues(
+        `<line x1="0" y1="50" x2="200" y2="50" stroke="#e4e8ec"${w}/><line x1="100" y1="0" x2="100" y2="100" stroke="#e4e8ec"${w}/><path d="M0 60H200" fill="none" stroke="#e4e8ec"${w}/><path d="M120 0V100" fill="none" stroke="#e4e8ec"${w}/><polyline points="0,70 200,70" fill="none" stroke="#e4e8ec"${w}/>`,
+      ),
+      [],
+    );
+});
+test("GRID a diagonal line, a bent path, two segments in one path and a closed path are marks", () => {
+  for (const [tag, el] of [
+    ["line", `<line x1="0" y1="0" x2="200" y2="100"`],
+    ["path", `<path d="M0 50H100V90" fill="none"`],
+    ["path", `<path d="M0 50H200M0 60H200" fill="none"`],
+    ["path", `<path d="M0 50H200Z" fill="none"`],
+    ["polyline", `<polyline points="0,50 100,50 200,50" fill="none"`],
+  ]) {
+    const out = gridIssues(`${el} stroke="#e4e8ec"/>`);
+    has(out, new RegExp(`^light: ${tag} stroke #e4e8ec at 1\\.23:1`));
+    has(out, new RegExp(`^dark: ${tag} stroke #21262d at 1\\.24:1`));
+  }
+});
+test("GRID a 10px grid-colour line under a text is its backdrop in both themes; a hairline is not", () => {
+  const style = GRID_DARK("#6e7681", `text[fill="#6b7885"]{fill:#8b949e}`);
+  const under = (w) =>
+    `<line x1="30" y1="0" x2="30" y2="100" stroke="#e4e8ec" stroke-width="${w}"/><text x="10" y="30" font-size="12" fill="#6b7885">label</text>`;
+  const out = gridIssues(under(10), style);
+  has(out, /^light: "label" #6b7885 at 3\.\d\d:1/);
+  has(out, /^dark: "label" #8b949e at 1\.\d\d:1/);
+  assert.deepEqual(gridIssues(under(1), style), []);
+});
+
+// ---- review: one fill geometry per shape kind, read by every predicate ----------------------------
+
+// a square rect, a rounded rect (rx 60), a circle and an outline-only rect over 20..180 of a
+// 200x200 canvas; on the canvas, one covering it (the rounded one with rx 20, the circle
+// r 142 around the centre)
+const KINDS = ["square", "rounded", "circle", "outline"];
+const THEMES_T = ["light", "dark"];
+const KTAG = {
+  square: "rect",
+  rounded: "rect",
+  circle: "circle",
+  outline: "rect",
+};
+const FILLED = new Set(["square", "rounded", "circle"]);
+const shapeKind = (kind, c, { canvas = false, stroke = null } = {}) => {
+  const paint =
+    kind === "outline"
+      ? `fill="none" stroke="${stroke ?? c}" stroke-width="2"`
+      : `fill="${c}"${stroke ? ` stroke="${stroke}" stroke-width="2"` : ""}`;
+  if (kind === "circle")
+    return `<circle cx="100" cy="100" r="${canvas ? 142 : 80}" ${paint}/>`;
+  const [at, size] = canvas ? [0, 200] : [20, 160];
+  const rx = kind === "rounded" ? ` rx="${canvas ? 20 : 60}"` : "";
+  return `<rect x="${at}" y="${at}" width="${size}" height="${size}"${rx} ${paint}/>`;
+};
+// ink and a faint tint (under 3:1 on the page) in each theme
+const INK = { light: "#333333", dark: "#cccccc" };
+const FAINT = { light: "#eeeeee", dark: "#161b22" };
+const KIND_DARK = darkRules(
+  `rect[fill="#ffffff"]{fill:#0d1117}` +
+    ["rect", "circle", "text"]
+      .map((t) => `${t}[fill="#333333"]{fill:#cccccc}`)
+      .join("") +
+    ["rect", "circle"]
+      .map(
+        (t) =>
+          `${t}[stroke="#333333"]{stroke:#cccccc}${t}[fill="#eeeeee"]{fill:#161b22}${t}[stroke="#eeeeee"]{stroke:#161b22}`,
+      )
+      .join(""),
+);
+const kindDoc = (body, { page = true, style = KIND_DARK } = {}) =>
+  `<svg xmlns="http://www.w3.org/2000/svg" width="200" height="200" viewBox="0 0 200 200" ${FONT}><style>${style}</style>${page ? `<rect width="200" height="200" fill="#ffffff"/>` : ""}${body}</svg>`;
+const txt = (s, x, y, fill, size = 12) =>
+  `<text x="${x}" y="${y}" font-size="${size}" fill="${fill}">${s}</text>`;
+const dot = (x, y, r, fill) =>
+  `<circle cx="${x}" cy="${y}" r="${r}" fill="${fill}"/>`;
+const reEsc = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+// the issues of one theme, its prefix removed
+const inTheme = (out, theme) =>
+  out
+    .filter((i) => i.startsWith(`${theme}: `))
+    .map((i) => i.slice(theme.length + 2));
+const expectIn = (out, theme, re, want) =>
+  assert.equal(
+    inTheme(out, theme).some((i) => re.test(i)),
+    want,
+    `${want ? "no" : "an"} ${theme} issue matching ${re} in ${JSON.stringify([...out])}`,
+  );
+
+// predicate -> (kind, theme) -> check; the comment on each names what it pins
+const MATRIX = {
+  // page selection: a fill that covers the whole canvas (a rounded rect leaves its corners)
+  page: (kind, theme) => {
+    const out = audit(
+      kindDoc(shapeKind(kind, FAINT.light, { canvas: true }), { page: false }),
+    );
+    const isPage = kind === "square" || kind === "circle";
+    const ch = kind === "outline" ? "stroke" : "fill";
+    expectIn(
+      out,
+      theme,
+      new RegExp(`^${KTAG[kind]} ${ch} ${reEsc(FAINT[theme])} at`),
+      !isPage,
+    );
+    assert.equal(
+      out.notes.some((n) => /no background rect/.test(n)),
+      !isPage,
+      JSON.stringify(out.notes),
+    );
+  },
+  // a shape frames a text whose anchor is inside its area: centre
+  "frames text (centre)": (kind, theme) => {
+    const out = issuesOf(
+      kindDoc(shapeKind(kind, FAINT.light) + txt("x", 100, 104, INK.light)),
+    );
+    expectIn(out, theme, /^(rect|circle) (fill|stroke)/, false);
+    expectIn(out, theme, /cannot verify/, false);
+  },
+  // ... and not one anchored in a clipped corner of its box
+  "frames text (corner)": (kind, theme) => {
+    const out = issuesOf(
+      kindDoc(shapeKind(kind, FAINT.light) + txt("x", 23, 30, INK.light)),
+    );
+    const framed = kind === "square" || kind === "outline";
+    expectIn(
+      out,
+      theme,
+      new RegExp(`^${KTAG[kind]} fill ${reEsc(FAINT[theme])} at`),
+      !framed,
+    );
+  },
+  // a text's backdrop: same-coloured text inside a filled shape fails at 1:1
+  "text backdrop": (kind, theme) => {
+    const out = issuesOf(
+      kindDoc(shapeKind(kind, INK.light) + txt("x", 100, 104, INK.light)),
+    );
+    expectIn(
+      out,
+      theme,
+      new RegExp(`^"x" ${reEsc(INK[theme])} at 1\\.00:1`),
+      FILLED.has(kind),
+    );
+    expectIn(out, theme, /cannot verify/, false);
+  },
+  // a mark's backdrop: a same-coloured smaller dot inside a filled shape fails at 1:1
+  "mark backdrop": (kind, theme) => {
+    const out = issuesOf(
+      kindDoc(shapeKind(kind, INK.light) + dot(100, 100, 4, INK.light)),
+    );
+    expectIn(
+      out,
+      theme,
+      new RegExp(`^circle fill ${reEsc(INK[theme])} at 1\\.00:1`),
+      FILLED.has(kind),
+    );
+    expectIn(out, theme, /cannot verify/, false);
+  },
+  // collisions: a text or dot in a corner of the box outside a rounded rect or circle is on
+  // the page, not on the shape
+  "collision (text in a corner)": (kind, theme) => {
+    const out = issuesOf(
+      kindDoc(shapeKind(kind, INK.light) + txt("x", 23, 34, INK.light, 10)),
+    );
+    expectIn(out, theme, /^"x" #\w+ at/, kind === "square");
+    expectIn(out, theme, /cannot verify/, false);
+  },
+  "collision (dot in a corner)": (kind, theme) => {
+    const out = issuesOf(
+      kindDoc(shapeKind(kind, INK.light) + dot(26, 26, 2, INK.light)),
+    );
+    expectIn(
+      out,
+      theme,
+      new RegExp(`^circle fill ${reEsc(INK[theme])} at 1\\.00:1`),
+      kind === "square",
+    );
+    expectIn(out, theme, /cannot verify/, false);
+  },
+  // covers: a shape drawn after a text or dot paints over it where its area reaches
+  "covers (text at the centre)": (kind, theme) => {
+    const out = issuesOf(
+      kindDoc(txt("x", 100, 104, INK.light) + shapeKind(kind, FAINT.light)),
+    );
+    expectIn(out, theme, /^"x" is covered by/, FILLED.has(kind));
+  },
+  "covers (dot at the centre)": (kind, theme) => {
+    const out = issuesOf(
+      kindDoc(dot(100, 100, 4, INK.light) + shapeKind(kind, FAINT.light)),
+    );
+    expectIn(out, theme, /^circle fill is covered by/, FILLED.has(kind));
+  },
+  "covers (dot in a corner)": (kind, theme) => {
+    const out = issuesOf(
+      kindDoc(dot(26, 26, 2, INK.light) + shapeKind(kind, FAINT.light)),
+    );
+    expectIn(out, theme, /^circle fill is covered by/, kind === "square");
+  },
+};
+for (const [pred, check] of Object.entries(MATRIX))
+  for (const kind of KINDS)
+    for (const theme of THEMES_T)
+      test(`GEOM ${pred} x ${kind} (${theme})`, () => check(kind, theme));
+
+// figure-box classification, per theme: the stroke paints in that theme only. A 9px text
+// inside a stroked container (filled or outline only) gets the box floor; one in a clipped
+// corner is outside it
+const BOX_STYLE = {
+  light: [
+    "#555555",
+    ["rect", "circle"].map((t) => `${t}[stroke="#555555"]{stroke:none}`),
+  ],
+  dark: [
+    "none",
+    ["rect", "circle"].map((t) => `${t}[stroke="none"]{stroke:#cccccc}`),
+  ],
+};
+for (const [where, x, y] of [
+  ["centre", 100, 104],
+  ["corner", 23, 30],
+])
+  for (const kind of KINDS)
+    for (const theme of THEMES_T)
+      test(`GEOM figure box (${where}) x ${kind} (${theme})`, () => {
+        const [stroke, rules] = BOX_STYLE[theme];
+        const style = KIND_DARK.replace(/\}$/, `${rules.join("")}}`);
+        const out = issuesOf(
+          kindDoc(
+            shapeKind(kind, FAINT.light, { stroke }) +
+              txt("x", x, y, INK.light, 9),
+            { style },
+          ),
+        );
+        const want =
+          where === "centre" || kind === "square" || kind === "outline";
+        const other = theme === "light" ? "dark" : "light";
+        const floor = /^"x" is 9px inside a figure box \(floor 11px\)/;
+        const own = theme === "light" ? out : inTheme(out, "dark");
+        assert.equal(
+          own.some((i) => floor.test(i)),
+          want,
+          JSON.stringify(out),
+        );
+        const rest = other === "light" ? out : inTheme(out, "dark");
+        assert.ok(!rest.some((i) => floor.test(i)), JSON.stringify(out));
+      });
+
+test("GEOM a canvas-sized rect with rx=20 is not the page: its corners show the page under it", () => {
+  const out = audit(
+    kindDoc(
+      `<rect width="200" height="200" rx="20" fill="#eeeeee"/>${txt("x", 100, 104, INK.light)}`,
+      { page: false },
+    ),
+  );
+  assert.ok(
+    out.notes.some((n) => /no background rect/.test(n)),
+    JSON.stringify(out.notes),
+  );
+});
+test("GEOM white text entering a rounded rect's clipped corner is not framed by it", () => {
+  // white text on the dark page in dark, black in light; the rect is a faint tint
+  const style = KIND_DARK.replace(/\}$/, `text[fill="#000000"]{fill:#ffffff}}`);
+  const out = issuesOf(
+    kindDoc(
+      `<rect x="20" y="20" width="160" height="160" rx="60" fill="#eeeeee"/>${txt("x", 23, 30, "#000000")}`,
+      { style },
+    ),
+  );
+  has(out, /^dark: rect fill #161b22 at 1\.\d\d:1/);
+  has(out, /^light: rect fill #eeeeee at 1\.\d\d:1/);
+});
+test("GEOM a 9px text inside a fill=none bordered rect gets the box floor", () => {
+  has(
+    issuesOf(
+      kindDoc(
+        `<rect x="20" y="20" width="160" height="160" fill="none" stroke="#333333"/>${txt("x", 100, 104, INK.light, 9)}`,
+      ),
+    ),
+    /^"x" is 9px inside a figure box \(floor 11px\)/,
+  );
+});
+test("GEOM white text whose glyphs all lie inside a dark circle, near its arc, passes in both themes", () => {
+  // the tall glyph in the middle sets the text's box; the short ones at the ends sit
+  // inside the arc where that box's top corners do not
+  const style = darkRules(
+    `rect[fill="#ffffff"]{fill:#0d1117}circle[fill="#222222"]{fill:#dddddd}text[fill="#ffffff"]{fill:#000000}`,
+  );
+  none(
+    kindDoc(
+      `<circle cx="100" cy="100" r="80" fill="#222222"/><text x="100" y="38" font-size="12" text-anchor="middle" fill="#ffffff">ooooolooooo</text>`,
+      { style },
+    ),
+  );
+  // the same text moved up through the arc onto the page fails
+  has(
+    issuesOf(
+      kindDoc(
+        `<circle cx="100" cy="100" r="80" fill="#222222"/><text x="100" y="24" font-size="12" text-anchor="middle" fill="#ffffff">ooooolooooo</text>`,
+        { style },
+      ),
+    ),
+    /^light: "ooooolooooo" #ffffff at 1\.00:1/,
+  );
+});
+test("GEOM a rect whose rx clamps unequally (elliptical corners) strokes over a dot 1.84px inside its end", () => {
+  // x=20 w=160 h=10 rx=30: rx 30, ry 5. The point (22.5, 55) lies 1.84px from the edge,
+  // under the 4px stroke, and inside the ellipse with radii rx-2 and ry-2
+  const body = `<rect x="20" y="50" width="160" height="10" rx="30" fill="#ffffff" stroke="#000000" stroke-width="4"/><text x="22.5" y="55.1" font-size="0.5" text-anchor="middle" fill="#000000">.</text>`;
+  const style = darkRules(
+    `rect[fill="#ffffff"]{fill:#0d1117}text[fill="#000000"]{fill:#ffffff}rect[stroke="#000000"]{stroke:#ffffff}`,
+  );
+  const out = issuesOf(doc(body, { w: 200, h: 100, style }), {
+    minText: 0,
+    minBoxText: 0,
+  });
+  has(out, /^light: "\." #000000 at 1\.00:1/);
+  has(out, /^dark: "\." #ffffff at 1\.00:1/);
 });
