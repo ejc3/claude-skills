@@ -25,14 +25,17 @@ and prove the fix with a check that fails without it. Don't write it down as a k
   when the viewer picks a suggestion does nothing with an autofilled value. Handle it: look the
   text up and take the first match, or validate it directly.
 - **A spelling correction is also `insertReplacementText`.** It swaps one word, while AutoFill
-  brings a whole value. Treat a replacement as AutoFill only when the text grows by a lot at
-  once (8 or more characters works well for addresses). Otherwise, accepting a correction
-  commits a lookup result the viewer never chose.
+  brings a whole value. Set aside the text the old and new values share at the start and the
+  end, and treat a replacement as AutoFill only when what changed spans more than one word or
+  at least 8 characters. Don't use net growth: AutoFill can replace a long address with a
+  shorter one. Otherwise, accepting a correction commits a lookup result the viewer never
+  chose.
 - **One lookup at a time, and drop late answers.** If an autofilled value starts a lookup and
   the same value also starts the suggestion list's search, the later request wins and the
   filled value is lost. Give every lookup one sequence counter. Advance it on every edit and
-  whenever the value is set from outside (a saved item tapped, a reset), so a late answer
-  can't refill a field the viewer has since cleared or changed. Keep the list closed for an
+  whenever the value is set from outside (a saved item tapped, a reset), and when the
+  component unmounts (the viewer switches tabs), so a late answer can't refill a field the
+  viewer has since cleared or overwrite a newer choice. Keep the list closed for an
   autofilled value.
 - **Multi-line values lose their line breaks** in a single-line `<input>`: the street and the
   city run together. Split on a separator you add, not on a newline.
@@ -46,8 +49,9 @@ and prove the fix with a check that fails without it. Don't write it down as a k
 - **Inputs are at least 16 px.** Smaller text makes iPhone Safari zoom the page when the field
   is focused, and it stays zoomed. Don't fix this with `maximum-scale=1`: that also blocks
   pinch-zoom for people who need it.
-- **Native pickers differ.** `<input type="time">` shows seconds in desktop WebKit unless
-  `step` is 60 or more. A `<select>` looks different on every platform unless you reset its
+- **Native pickers differ.** `<input type="time">` shows a seconds field when its `step` is
+  not a whole number of minutes, or when its value or `min` has seconds (`08:10:30`). The
+  default step is already 60: keep it a multiple of 60 and keep seconds out of the values. A `<select>` looks different on every platform unless you reset its
   appearance (`appearance: none`) and draw one chevron.
 - **Choose the right keyboard.** Use `inputmode` (`numeric`, `decimal`, `email`, `tel`,
   `search`) and `enterkeyhint`, so the phone shows a keyboard that fits the field.
@@ -78,10 +82,14 @@ and prove the fix with a check that fails without it. Don't write it down as a k
 
 ## Home-screen installs and storage
 
-- **A site added to the home screen has its own storage**, separate from Safari's, and it
-  starts empty. Its first screen must be useful with no saved state.
-- **To be installable**, a site needs a web app manifest (`display: standalone`), an
-  `apple-touch-icon`, and a `theme-color`. Check the icon on a real home screen.
+- **A site added to the home screen has its own storage**, separate from Safari's. Since
+  iOS 17.2, installing copies Safari's cookies (so a signed-in viewer stays signed in), but
+  `localStorage`, IndexedDB and the rest start empty. Its first screen must be useful with no
+  saved state, and you should test both a signed-in and an empty first launch.
+- **Installing needs nothing from the site on iOS 26 and later**: any page can be added and
+  opens as a web app. A web app manifest (`display: standalone`, name, icons), an
+  `apple-touch-icon` and a `theme-color` decide how it looks and opens, and older iOS
+  versions rely on them more. Check the icon on a real home screen.
 - **`localStorage` can throw** (some private modes, storage full) or be cleared by the system
   after weeks without a visit. Wrap every read and write, and never keep the only copy of
   something that matters there.
