@@ -124,7 +124,7 @@ const NUMBER = new RegExp(
 const SUPERSCRIPT = "[⁺⁻]?[⁰¹²³⁴⁵⁶⁷⁸⁹]+";
 const EXPONENT = `(?:${SUPERSCRIPT}|\\^[+−-]?\\d+)`;
 const TAIL = new RegExp(
-  `^(?<sp>${SPACE}?)(?<hy>-?)(?<tok>[\\p{L}°%×]+${EXPONENT}?(?:[·×*/]\\p{L}+${EXPONENT}?)*|${SUPERSCRIPT})(?![\\p{L}\\p{N}°%×])`,
+  `^(?<sp>${SPACE}?)(?<hy>-?)(?<tok>[\\p{L}°%×]+${EXPONENT}?(?:[·×*/][\\p{L}°%]+${EXPONENT}?)*|${SUPERSCRIPT})(?![\\p{L}\\p{N}°%×])`,
   "u",
 );
 const hasLetter = /\p{L}/u;

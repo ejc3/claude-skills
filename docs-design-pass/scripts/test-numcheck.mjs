@@ -527,6 +527,8 @@ for (const [a, b, added] of [
   ["9 kg·m/s²", "9 kg·m/s³", "9kg·m/s³"],
   ["10m·s⁻¹", "10m·s⁻²", "10m·s⁻²"],
   ["2 N·m", "2 N", "2N"],
+  ["10 m/°C", "10 m/°F", "10m/°F"],
+  ["5 %/s", "5 %/h", "5%/h"],
 ]) {
   test(`COMPOUND "${a}" -> "${b}" is an added number`, () => {
     const r = edit(`a rate of ${a} here\n`, `a rate of ${b} here\n`);
