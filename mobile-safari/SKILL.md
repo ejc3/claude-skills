@@ -25,10 +25,11 @@ and prove the fix with a check that fails without it. Don't write it down as a k
   when the viewer picks a suggestion does nothing with an autofilled value. Handle it: look the
   text up and take the first match, or validate it directly.
 - **A spelling correction is also `insertReplacementText`.** It swaps one word, while AutoFill
-  brings a whole value. Set aside the text the old and new values share at the start and the
-  end, and treat a replacement as AutoFill only when what changed spans more than one word or
-  at least 8 characters. Don't use net growth: AutoFill can replace a long address with a
-  shorter one. Otherwise, accepting a correction commits a lookup result the viewer never
+  brings a whole value. Compare words, not lengths: a replacement that swaps exactly one word
+  for one word (same word count, one word different) is a correction and stays typing; any
+  other replacement is AutoFill. Every length rule fails one way or the other: AutoFill can put
+  in a single short word or replace an address with a shorter one, and a correction can change
+  nine characters. A correction treated as AutoFill commits a lookup result the viewer never
   chose.
 - **One lookup at a time, and drop late answers.** If an autofilled value starts a lookup and
   the same value also starts the suggestion list's search, the later request wins and the
