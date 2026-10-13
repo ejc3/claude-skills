@@ -1734,10 +1734,13 @@ export function auditSvg(
     const same = (c, want) =>
       c !== null && c.rgb.every((v, i) => v === want.rgb[i]);
     if (!same(paintOf(e, "stroke", "light").color, grid)) return false;
+    const dark =
+      theme === "dark" && gridDark && paintOf(e, "stroke", "dark").color;
+    // the configured dark colour, alpha included: #8b949e20 does not match opaque #8b949e
     return (
       theme !== "dark" ||
       !gridDark ||
-      same(paintOf(e, "stroke", "dark").color, gridDark)
+      (same(dark, gridDark) && dark.a === gridDark.a)
     );
   };
   const shapes = drawn.filter((e) => e.tag !== "text");

@@ -2427,6 +2427,17 @@ test("GRIDDARK a hairline under a text in another dark colour is the text's back
     /^dark: "label" #8b949e at 1\.\d\d:1/,
   );
 });
+test("GRIDDARK the dark grid colour match includes its alpha", () => {
+  // a translucent dark grid colour does not exempt an opaque stroke of the same rgb
+  const style = GRID_DARK("#8b949e", `text[fill="#6b7885"]{fill:#8b949e}`);
+  const body = `<line x1="30" y1="0" x2="30" y2="100" stroke="#e4e8ec"/><text x="10" y="30" font-size="12" fill="#6b7885">label</text>`;
+  has(
+    issuesOf(doc(body, { w: 200, h: 100, style }), {
+      gridColorDark: "#8b949e20",
+    }),
+    /^dark: "label" #8b949e at 1\.00:1/,
+  );
+});
 test("GRIDDARK a bad gridColorDark is a TypeError", () => {
   assert.throws(
     () => auditSvg(svg({}), { gridColorDark: "not-a-colour" }),
