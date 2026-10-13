@@ -514,3 +514,35 @@ for (const [a, b] of [
     assert.equal(r.status, 0, r.stdout + r.stderr);
   });
 }
+
+// ---- issue 5: a compound unit keeps every factor joined by ·, ×, * or / ----------------------------
+
+for (const [a, b, added] of [
+  ["10 m·s⁻¹", "10 m·s⁻²", "10m·s⁻²"],
+  ["10 m·s", "10 m·kg", "10m·kg"],
+  ["4 N×m", "4 N×s", "4N×s"],
+  ["4 N²×m", "4 N²×s", "4N²×s"],
+  ["4 kW*h", "4 kW*s", "4kW\\*s"],
+  ["3 kg·m²·s⁻²", "3 kg·m²·s⁻³", "3kg·m²·s⁻³"],
+  ["9 kg·m/s²", "9 kg·m/s³", "9kg·m/s³"],
+  ["10m·s⁻¹", "10m·s⁻²", "10m·s⁻²"],
+  ["2 N·m", "2 N", "2N"],
+]) {
+  test(`COMPOUND "${a}" -> "${b}" is an added number`, () => {
+    const r = edit(`a rate of ${a} here\n`, `a rate of ${b} here\n`);
+    assert.equal(r.status, 1, r.stdout + r.stderr);
+    assert.match(r.stdout, new RegExp(`ADDED ${added}(\\s|$)`));
+  });
+}
+for (const [a, b] of [
+  ["10 m·s⁻¹", "10m·s⁻¹"],
+  ["4 kW*h", "4kW*h"],
+  ["**10 ms** total", "**10ms** total"],
+  ["3×4 grid", "3×4 grid, reworded"],
+  ["5*3", "5*3"],
+]) {
+  test(`COMPOUND "${a}" and "${b}" read as the same number`, () => {
+    const r = edit(`it ran ${a} here\n`, `it ran ${b} here\n`);
+    assert.equal(r.status, 0, r.stdout + r.stderr);
+  });
+}

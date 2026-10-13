@@ -508,3 +508,28 @@ test("SLUG headings foo-1, foo, foo get foo-1, foo, foo-2", () => {
     3,
   );
 });
+
+// ---- issue 5: a definition's destination is unescaped like an inline one ---------------------
+
+test("DEFESC backslash escapes in a definition's destination resolve as in an inline link", () => {
+  const files = { "f(x).md": "x\n", "g).md": "x\n", "h>.md": "x\n" };
+  expectClean(
+    check(
+      "[a][x] [b][y] [c][z] [d][w]\n\n[x]: f\\(x\\).md\n[y]: <h\\>.md>\n[z]:\n  g\\).md\n[w]:\n<h\\>.md>\n",
+      files,
+    ),
+    8,
+  );
+  expectBroken(
+    check("[a][x]\n\n[x]: nope\\(x\\).md\n"),
+    1,
+    /a\.md:3: missing file nope\(x\)\.md/,
+  );
+});
+test("DEFESC a definition's <...> destination with an unescaped < inside is not a destination", () => {
+  expectBroken(
+    check("[a][x]\n\n[x]: <h<.md>\n", { "h<.md": "x\n" }),
+    1,
+    /undefined reference \[a\]\[x\]/,
+  );
+});

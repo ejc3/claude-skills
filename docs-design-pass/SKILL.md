@@ -114,7 +114,8 @@ its markers fails the generator.
   owning doc still states, and each addition (e.g. a renamed `12x` → `12×`, or a
   number moved in from its owning doc) is listed with its source field. A number
   keeps the word after it, after a space or a hyphen (`10 ms` = `10-ms`) and
-  with any exponent (`m²`, `s⁻¹`), as its unit (function words aside), so a
+  with any exponent (`m²`, `s⁻¹`) and any factors joined by `·`, `×`, `*` or
+  `/` (`m·s⁻¹`), as its unit (function words aside), so a
   reworded unit word (`10 milliseconds` → `10 ms`,
   `12 apps` → `12 applications`) reads as a changed number and is justified like
   any other addition.
@@ -201,8 +202,10 @@ in a default install. The scripts live in `<skill-dir>/scripts/`, apart from any
   `translate()`, no opacity) and reports anything else as an issue; text widths
   are bounded by Arial plus 10% and DejaVu Sans, measured per glyph. It is a
   lint for SVG your own generators emit, not a validator for untrusted input.
-  `node <skill-dir>/scripts/svg-audit.mjs [--min-text 9] [--min-box-text 11] [--grid-color '#e4e8ec'] *.svg`,
-  or import `auditSvg` into the repo's test. Exit 1 on any issue, 2 on a usage
+  `node <skill-dir>/scripts/svg-audit.mjs [--min-text 9] [--min-box-text 11] [--grid-color '#e4e8ec'] [--grid-color-dark COLOR] *.svg`,
+  or import `auditSvg` into the repo's test. A grid hairline is exempt in dark
+  only in the `--grid-color-dark` colour when it is given, and in any dark
+  colour when it is not. Exit 1 on any issue, 2 on a usage
   or read error; `-h` prints usage.
 - `<skill-dir>/scripts/numcheck.mjs`: number-preservation check for prose
   edits, `node <skill-dir>/scripts/numcheck.mjs <base-ref> <doc.md>...`. Exit 1

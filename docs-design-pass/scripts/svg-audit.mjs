@@ -5,7 +5,8 @@
 // `@media (prefers-color-scheme: dark)` rules applied to the elements they select,
 // so the audit checks what a GitHub dark-mode reader sees.
 //
-//   node svg-audit.mjs [--min-text 9] [--min-box-text 11] [--grid-color #e4e8ec] chart.svg...
+//   node svg-audit.mjs [--min-text 9] [--min-box-text 11] [--grid-color #e4e8ec]
+//                      [--grid-color-dark COLOR] chart.svg...
 //   import { auditSvg } from "./svg-audit.mjs"   (for a repo's own test)
 //
 // Exits 1 when any file has an issue, 2 on a usage or read error. -h/--help prints usage.
@@ -40,12 +41,13 @@
 // anything else; one drawn after content is an ordinary shape over it.
 // A stroke drawn before a text under its glyphs is composited both ways, except a grid
 // hairline (one horizontal or vertical segment at most 1px wide, stroked in the grid
-// colour); a mark is not checked against other marks' strokes under it (marks that
-// cross); a stroke's own element's fill is part of its backdrop. A filled path or
-// polyline drawn before a text or mark it overlaps is an issue (its coverage is not
-// modelled), as is anything painted after a text over its glyphs, and any one shape
-// painted after a mark over all of it (a fill, or a stroke's band; partial overlap is
-// marks that cross).
+// colour; in dark, also in the dark grid colour when one is given, else in whatever
+// colour the dark rules give it); a mark is not checked against other marks' strokes
+// under it (marks that cross); a stroke's own element's fill is part of its backdrop. A
+// filled path or polyline drawn before a text or mark it overlaps is an issue (its
+// coverage is not modelled), as is anything painted after a text over its glyphs, and
+// any one shape painted after a mark over all of it (a fill, or a stroke's band; partial
+// overlap is marks that cross).
 // A text is laid out as rsvg and Chromium both do: XML whitespace stripped at its ends
 // and collapsed inside, other spaces (NBSP, U+202F) kept; a line break inside a text or
 // a non-collapsible space at either end, where the two differ, is refused, and so is a
@@ -1302,7 +1304,7 @@ function parseDarkSheet(css, unsupported) {
 
 export function auditSvg(
   svg,
-  { minText = 9, minBoxText = 11, gridColor = "#e4e8ec" } = {},
+  { minText = 9, minBoxText = 11, gridColor = "#e4e8ec", gridColorDark } = {},
 ) {
   for (const [name, v] of [
     ["minText", minText],
@@ -1316,6 +1318,12 @@ export function auditSvg(
   if (!grid)
     throw new TypeError(
       `auditSvg: gridColor must be a colour, got ${gridColor}`,
+    );
+  const gridDark =
+    gridColorDark === undefined ? null : parseColor(gridColorDark);
+  if (gridColorDark !== undefined && !gridDark)
+    throw new TypeError(
+      `auditSvg: gridColorDark must be a colour, got ${gridColorDark}`,
     );
 
   const out = [];
@@ -1712,7 +1720,8 @@ export function auditSvg(
   };
   // a gridline or rule in a theme: one horizontal or vertical segment (a line, or a path or
   // polyline of two points) at most 1px wide, stroked in the grid colour. The colour is
-  // read in light (the dark rules select it by that value); the width in the theme
+  // read in light (the dark rules select it by that value); the width in the theme. With a
+  // dark grid colour given, a hairline in dark must also be stroked in it there
   const isGridHairline = (e, theme) => {
     if (!HAIRLINES.has(e.tag)) return false;
     if (!(+prop(e, "stroke-width", theme) <= 1)) return false;
@@ -1722,8 +1731,14 @@ export function auditSvg(
     if (closed || pts.length !== 2) return false;
     const [[x0, y0], [x1, y1]] = pts;
     if ((x0 === x1) === (y0 === y1)) return false; // slanted, or no length
-    const c = paintOf(e, "stroke", "light").color;
-    return c !== null && c.rgb.every((v, i) => v === grid.rgb[i]);
+    const same = (c, want) =>
+      c !== null && c.rgb.every((v, i) => v === want.rgb[i]);
+    if (!same(paintOf(e, "stroke", "light").color, grid)) return false;
+    return (
+      theme !== "dark" ||
+      !gridDark ||
+      same(paintOf(e, "stroke", "dark").color, gridDark)
+    );
   };
   const shapes = drawn.filter((e) => e.tag !== "text");
   // a fill whose outline crosses itself: which parts are inside is not modelled
@@ -2211,7 +2226,8 @@ const article = (tag) => (/^[aeiou]/.test(tag) ? `an ${tag}` : `a ${tag}`);
 // ---- CLI ---------------------------------------------------------------------------------
 
 const USAGE =
-  "usage: node svg-audit.mjs [--min-text N] [--min-box-text N] [--grid-color COLOR] chart.svg...";
+  "usage: node svg-audit.mjs [--min-text N] [--min-box-text N] [--grid-color COLOR] [--grid-color-dark COLOR] chart.svg...\n" +
+  "  --grid-color-dark: a grid hairline is exempt in dark only in this colour; without it, in any dark colour";
 
 function main(argv) {
   const fail = (msg) => {
@@ -2228,6 +2244,7 @@ function main(argv) {
         "min-text": { type: "string" },
         "min-box-text": { type: "string" },
         "grid-color": { type: "string" },
+        "grid-color-dark": { type: "string" },
         help: { type: "boolean", short: "h" },
       },
     });
@@ -2246,6 +2263,8 @@ function main(argv) {
   if ("min-text" in values) opt.minText = num(values["min-text"]);
   if ("min-box-text" in values) opt.minBoxText = num(values["min-box-text"]);
   if ("grid-color" in values) opt.gridColor = values["grid-color"];
+  if ("grid-color-dark" in values)
+    opt.gridColorDark = values["grid-color-dark"];
   let bad = 0;
   for (const f of files) {
     let src;

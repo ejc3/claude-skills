@@ -8,7 +8,8 @@
 // Link forms read: [t](dest), [t](dest "title"), [t](dest 'title'), [t](<dest with spaces>),
 // ![alt](src) (a bare dest may nest balanced parentheses to any depth or escape them with
 // `\`; an unbalanced one is not a link), and `[ref]: dest` definitions (the dest may
-// start the next line; a definition with no destination defines nothing). Full
+// start the next line or be in <...>, and its backslash escapes resolve as a link's do; a
+// definition with no destination defines nothing). Full
 // [t][label] and collapsed [label][] reference usages must name a definition (labels
 // match case-insensitively, whitespace collapsed); a shortcut [label] is ordinary text
 // unless a definition exists, and then the definition's destination is what gets
@@ -157,6 +158,17 @@ function anchors(file) {
 
 // backslash escapes of ASCII punctuation, resolved
 const unescape = (s) => s.replace(/\\([!-/:-@[-`{-~])/g, "$1");
+// a <...> destination opening at s[j] === "<" (no unescaped < or >, closed on the line) →
+// { dest, end } with dest unescaped and end just past the `>`, else null
+function angleDest(s, j) {
+  const from = ++j;
+  for (; j < s.length && s[j] !== ">"; j++) {
+    if (s[j] === "<") return null;
+    if (s[j] === "\\" && j + 1 < s.length) j++;
+  }
+  if (j >= s.length) return null;
+  return { dest: unescape(s.slice(from, j)), end: j + 1 };
+}
 // the inline link whose `](` is at s[i] (CommonMark 0.31.2 §6.3): its destination, in
 // <...> (no unescaped < or >) or bare (no space or control character; parentheses
 // balanced at any depth or backslash-escaped), then an optional title "…", '…' or (…)
@@ -168,13 +180,9 @@ function linkTail(s, i) {
   while (SPACE.test(s[j] ?? "")) j++;
   let dest;
   if (s[j] === "<") {
-    const from = ++j;
-    for (; j < s.length && s[j] !== ">"; j++) {
-      if (s[j] === "<") return null;
-      if (s[j] === "\\" && j + 1 < s.length) j++;
-    }
-    if (j >= s.length) return null;
-    dest = s.slice(from, j++);
+    const angle = angleDest(s, j);
+    if (!angle) return null;
+    ({ dest, end: j } = angle);
   } else {
     const from = j;
     let depth = 0;
@@ -188,14 +196,14 @@ function linkTail(s, i) {
       } else if (/[\x00-\x20\x7f]/.test(c)) break;
     }
     if (depth) return null;
-    dest = s.slice(from, j);
+    dest = unescape(s.slice(from, j));
   }
   const title =
     /^(?:[ \t]+(?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|\((?:\\.|[^()\\])*\)))?[ \t]*\)/.exec(
       s.slice(j),
     );
   if (!title) return null;
-  return { dest: unescape(dest), end: j + title[0].length };
+  return { dest, end: j + title[0].length };
 }
 // the inline links and images on one line: [{ start, end, text, dest }], start at the
 // opening `[` (or `!`), text the bracketed text. Link text holds no brackets here
@@ -217,26 +225,38 @@ const noCode = (line) =>
 // colon takes its destination from `next`, the following line (CommonMark allows one line
 // ending before the destination): inside the same blockquote, holding only the destination
 // and an optional title. With no destination there is no definition: `dest` is undefined
-// and the label stays undefined.
+// and the label stays undefined. The destination is read as an inline link's is: a <...>
+// one by angleDest, and backslash escapes resolved in either form.
 function definition(line, next = "") {
+  const text = noCode(line);
   const def =
-    /^((?:[ \t]*>)*)[ \t]*(?:(?:[-*+]|\d+[.)])[ \t]+)?\[((?:\\.|[^\]\\])+)\]:[ \t]*(?:<([^>]*)>|(\S+))?/.exec(
-      noCode(line),
+    /^((?:[ \t]*>)*)[ \t]*(?:(?:[-*+]|\d+[.)])[ \t]+)?\[((?:\\.|[^\]\\])+)\]:[ \t]*/.exec(
+      text,
     );
   if (!def || !def[2].trim() || def[2].startsWith("^")) return null;
   const label = def[2];
-  if ((def[3] ?? def[4]) !== undefined)
-    return { label, dest: def[3] ?? def[4] };
+  const rest = text.slice(def[0].length);
+  if (rest.trim()) return { label, dest: defDest(rest)?.dest };
   const quotes = def[1].split(">").length - 1;
-  const rest = noCode(next).replace(
-    new RegExp(`^(?:[ \\t]*>){0,${quotes}}`),
-    "",
-  );
-  const dest =
-    /^[ \t]*(?:<([^>]*)>|([^\s>]\S*))(?:[ \t]+(?:"[^"]*"|'[^']*'|\([^)]*\)))?[ \t]*$/.exec(
-      rest,
-    );
-  return { label, dest: dest ? (dest[1] ?? dest[2]) : undefined };
+  const after = noCode(next)
+    .replace(new RegExp(`^(?:[ \\t]*>){0,${quotes}}`), "")
+    .replace(/^[ \t]*/, "");
+  const dest = after.startsWith(">") ? null : defDest(after);
+  const tail = dest && after.slice(dest.end);
+  return {
+    label,
+    dest:
+      dest && /^(?:[ \t]+(?:"[^"]*"|'[^']*'|\([^)]*\)))?[ \t]*$/.test(tail)
+        ? dest.dest
+        : undefined,
+  };
+}
+// a definition's destination at the start of `s`: <...> as in an inline link, else the run
+// of non-space characters with backslash escapes resolved → { dest, end }, else null
+function defDest(s) {
+  if (s[0] === "<") return angleDest(s, 0);
+  const bare = /^\S+/.exec(s);
+  return bare && { dest: unescape(bare[0]), end: bare[0].length };
 }
 
 // destinations on one line (code spans removed), in order: a definition's, then each link's
