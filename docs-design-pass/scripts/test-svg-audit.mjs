@@ -2395,3 +2395,69 @@ test("COVER a join counts only at a vertex: a bent polyline is covered when its 
     doc(bent + `<rect x="10" y="49" width="41" height="41" fill="#777777"/>`),
   );
 });
+
+// ---- issue 5: the dark grid colour ------------------------------------------------------------
+
+test("GRIDDARK with gridColorDark a hairline is exempt in dark only in that colour", () => {
+  const hair = `<line x1="0" y1="50" x2="200" y2="50" stroke="#e4e8ec"/>`;
+  // without the option, today's behaviour: any dark recolour of a grid hairline is exempt
+  assert.deepEqual(gridIssues(hair, GRID_DARK("#30363d")), []);
+  // with it, the dark colour must match
+  assert.deepEqual(
+    issuesOf(doc(hair, { w: 200, h: 100, style: GRID_DARK("#21262d") }), {
+      gridColorDark: "#21262d",
+    }),
+    [],
+  );
+  const out = issuesOf(
+    doc(hair, { w: 200, h: 100, style: GRID_DARK("#30363d") }),
+    { gridColorDark: "#21262d" },
+  );
+  has(out, /^dark: line stroke #30363d at/);
+  assert.ok(!out.some((i) => /^light:/.test(i)), JSON.stringify(out));
+});
+test("GRIDDARK a hairline under a text in another dark colour is the text's backdrop", () => {
+  const style = GRID_DARK("#8b949e", `text[fill="#6b7885"]{fill:#8b949e}`);
+  const body = `<line x1="30" y1="0" x2="30" y2="100" stroke="#e4e8ec"/><text x="10" y="30" font-size="12" fill="#6b7885">label</text>`;
+  assert.deepEqual(gridIssues(body, style), []);
+  has(
+    issuesOf(doc(body, { w: 200, h: 100, style }), {
+      gridColorDark: "#21262d",
+    }),
+    /^dark: "label" #8b949e at 1\.\d\d:1/,
+  );
+});
+test("GRIDDARK the dark grid colour match includes its alpha", () => {
+  // a translucent dark grid colour does not exempt an opaque stroke of the same rgb
+  const style = GRID_DARK("#8b949e", `text[fill="#6b7885"]{fill:#8b949e}`);
+  const body = `<line x1="30" y1="0" x2="30" y2="100" stroke="#e4e8ec"/><text x="10" y="30" font-size="12" fill="#6b7885">label</text>`;
+  has(
+    issuesOf(doc(body, { w: 200, h: 100, style }), {
+      gridColorDark: "#8b949e20",
+    }),
+    /^dark: "label" #8b949e at 1\.00:1/,
+  );
+});
+test("GRIDDARK a bad gridColorDark is a TypeError", () => {
+  assert.throws(
+    () => auditSvg(svg({}), { gridColorDark: "not-a-colour" }),
+    /gridColorDark must be a colour/,
+  );
+});
+test("CLI --grid-color-dark sets the dark grid colour; a bad one is a usage error", () => {
+  const f = chartFile(
+    "griddark.svg",
+    doc(`<line x1="0" y1="50" x2="200" y2="50" stroke="#e4e8ec"/>`, {
+      w: 200,
+      h: 100,
+      style: GRID_DARK("#30363d"),
+    }),
+  );
+  expectExit(cli(f), 0);
+  expectExit(cli("--grid-color-dark", "#30363d", f), 0);
+  expectExit(cli("--grid-color-dark", "#21262d", f), 1, /dark: line stroke/);
+  const r = cli("--grid-color-dark", "not-a-colour", f);
+  expectExit(r, 2);
+  assert.match(r.stderr, /gridColorDark must be a colour/);
+  assert.match(r.stderr, /usage:/);
+});

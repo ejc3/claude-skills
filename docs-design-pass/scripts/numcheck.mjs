@@ -8,9 +8,11 @@
 //
 // A number keeps the unit that follows it, so a unit change reads as a changed number
 // (4 GHz -> 4 MHz, 20 °C -> 20 °F, 247 MB -> 247 GB). The unit is the run of letters,
-// `°`, `%`, `×` and a `/` between letters right after the number, with at most one space between them,
-// each run of letters keeping its exponent (10 m² -> 10 m³, 5 s⁻¹, 10 m^2); a superscript
-// attached to the number is its unit too (10² -> 10³):
+// `°`, `%` and `×` right after the number, with at most one space between them, then any
+// further factors joined to it by `·`, `×`, `*` or `/` (each a run of letters), each run of
+// letters keeping its exponent (10 m² -> 10 m³, 5 s⁻¹, 10 m^2, 10 m·s⁻¹ -> 10 m·s⁻²,
+// kg·m/s²), so a compound unit is compared whole; a superscript attached to the number is
+// its unit too (10² -> 10³):
 //   - attached ("8.3s", "12x", "5%", "3×", "20°"): always a unit.
 //   - after a space: any word is the unit ("12 V", "247 GB", "10 milliseconds",
 //     "3 sources"), except a function word ("10 to 20", "5 or 6", "3 of the apps"; a lone
@@ -122,7 +124,7 @@ const NUMBER = new RegExp(
 const SUPERSCRIPT = "[⁺⁻]?[⁰¹²³⁴⁵⁶⁷⁸⁹]+";
 const EXPONENT = `(?:${SUPERSCRIPT}|\\^[+−-]?\\d+)`;
 const TAIL = new RegExp(
-  `^(?<sp>${SPACE}?)(?<hy>-?)(?<tok>[\\p{L}°%×]+${EXPONENT}?(?:/\\p{L}+${EXPONENT}?)*|${SUPERSCRIPT})(?![\\p{L}\\p{N}°%×])`,
+  `^(?<sp>${SPACE}?)(?<hy>-?)(?<tok>[\\p{L}°%×]+${EXPONENT}?(?:[·×*/][\\p{L}°%]+${EXPONENT}?)*|${SUPERSCRIPT})(?![\\p{L}\\p{N}°%×])`,
   "u",
 );
 const hasLetter = /\p{L}/u;
@@ -142,7 +144,7 @@ const unitAt = (rest) => {
   if (!sp && !hy) return tok;
   if (WORD_UNITS.includes(tok)) return tok;
   if (!hasLetter.test(tok)) return "";
-  if (/[°/]/.test(tok) || acronym.test(tok)) return tok;
+  if (/[°/·×*]/.test(tok) || acronym.test(tok)) return tok;
   // any other word is kept as the unit ("12 V", "10 milliseconds"), unless it is a
   // function word ("3 of the apps"): the tool cannot tell an unlisted unit from a word, and
   // a changed unit must not pass, so a reworded word after a number reads as a changed
