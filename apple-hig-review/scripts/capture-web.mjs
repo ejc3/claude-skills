@@ -59,13 +59,11 @@ const profiles = [
 const place = { locale: process.env.CAPTURE_LOCALE || "en-US",
   ...(process.env.CAPTURE_TZ ? { timezoneId: process.env.CAPTURE_TZ } : {}) };
 
-// A file name per URL: its position in the argument list keeps names distinct, and a short
-// piece of the path keeps them readable. The host and query stay out: a query can carry a
-// token or an account id, and a file name travels with a shared screenshot.
-function slug(url, index) {
-  const path = new URL(url).pathname.replace(/[^a-z0-9]+/gi, "-").replace(/^-|-$/g, "").slice(0, 40);
-  return `${String(index + 1).padStart(2, "0")}-${path || "home"}`;
-}
+// A file name per URL is its position in the argument list, and nothing from the URL: a path
+// or query can carry a token or an account id, and a file name travels with a shared
+// screenshot. The list printed here says which number is which page.
+const slug = (index) => String(index + 1).padStart(2, "0");
+urls.forEach((url, index) => console.log(`${slug(index)}  ${url}`));
 
 let failures = 0;
 for (const profile of profiles) {
@@ -78,7 +76,7 @@ for (const profile of profiles) {
       const page = await context.newPage();
       for (const [index, url] of urls.entries()) {
         const tag = [profile.name, variant.colorScheme, variant.reducedMotion && "reduced-motion"].filter(Boolean).join("-");
-        const file = join(outDir, `${slug(url, index)}-${tag}.png`);
+        const file = join(outDir, `${slug(index)}-${tag}.png`);
         try {
           const response = await page.goto(url, { waitUntil: "load", timeout: 45_000 });
           // Let late requests settle, but never wait long on a page that keeps a request open.
