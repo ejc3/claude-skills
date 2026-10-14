@@ -29,6 +29,8 @@ Before writing anything, read:
   without your fix and it passes").
 - How the existing tests are written, so a new test looks like its neighbours.
   Put new cases into an existing test file when one covers the area.
+- What the maintainer changed in your earlier PRs to this project that were
+  applied, and the notes kept from them (section 9).
 - Open PRs and issues that touch the same functions, and whether the base branch
   has moved. Rebase onto the current base; say which base the evidence is for.
 
@@ -47,8 +49,23 @@ lead to check, not a fact to repeat.
   fix that also "corrected" a cursor column overwrote text; the reviewers
   caught it twice.)
 - Follow an idiom the codebase already uses for the same problem, and cite it.
+- When a nearby condition already takes the same action (the same `break` or
+  `return`, with nothing between them that the new case needs), add the new
+  case to it instead of writing a second `if`. (A guard written as its own
+  `if`, `break` and four-line comment was applied as one `||` in the existing
+  check above it, with the comment dropped.)
+- Keep comments as few and as short as those around them. A maintainer may
+  drop a comment, or rewrite one that explains why into one that says what the
+  code does ("The cursor may have been saved on a taller screen." became
+  "Clamp cursor to the current screen size."). Put the full reasoning in the
+  PR text, which stays linked from the project's history.
 - Commit messages describe what is in the diff: the symptom, the cause in the
-  code's own identifiers, the fix.
+  code's own identifiers, the fix. Expect the maintainer may keep only the
+  first line, or write their own; do not rely on the body surviving.
+- Write the test so it can be applied as it stands: it lives in the project's
+  test directory, needs nothing from the fix commit but the fix, and reads like
+  the tests beside it. A maintainer may apply all your tests later, in a
+  commit of their own, separate from the fixes.
 
 ## 3. Prove it, red then green
 
@@ -198,6 +215,21 @@ On the user's go-ahead for that PR:
 6. Update the walkthrough with the PR number, and record the state where the
    next session will find it.
 7. Report the link and stop. The next PR waits for the user.
+
+## 9. After it lands
+
+When the maintainer applies a PR, compare the patches, not the trees: the base
+has moved, so a tree diff shows upstream's changes as well. Use
+`git range-diff`, or diff `git show <your fix commit>` with
+`git show <landed commit>`, ignoring lines the project changes on every commit
+(an RCS id, a version stamp). Do the same for the tests.
+
+Write down each edit the maintainer made (code, comments, wrapping, commit
+message, which tests they kept) in notes on that project that the next session
+will find, such as its memory, and read them in section 1. Add a rule to
+section 2 only when it is more than one maintainer's taste: the same edit seen
+from more than one project, or a plain case of matching the code around it.
+Otherwise it is a fact about that project.
 
 ## Working habits
 
