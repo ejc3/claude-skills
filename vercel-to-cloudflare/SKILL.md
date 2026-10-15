@@ -282,8 +282,9 @@ Each line cost a review round or a broken production before it was written down.
 - **Marketplace storage dies with the team.** Upstash stores created through
   the Vercel Marketplace cannot be transferred between Vercel teams (the
   transfer feature listed Prisma, Neon and Supabase), and deleting the team
-  deletes them. Back up first, over REST: `DUMP` is not served there, so export
-  by type (`SCAN`, `TYPE`, then `GET` / `HGETALL` / `SMEMBERS` /
+  deletes them. Back up first, over REST. Upstash serves `DUMP` there, but
+  Valkey 8.1 rejects its payloads (`ERR DUMP payload version or checksum are
+  wrong`), so for a Valkey target export by type (`SCAN`, `TYPE`, then `GET` / `HGETALL` / `SMEMBERS` /
   `LRANGE 0 -1` / `ZRANGE 0 -1 WITHSCORES` / `XRANGE - +`, plus `PTTL`). A
   stream with consumer groups is more than its entries: the groups' cursors and
   pending (delivered, unacknowledged) entries are not in `XRANGE`, and

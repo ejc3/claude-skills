@@ -134,8 +134,11 @@ registry, not Docker Hub at task start.
 ## 4. Move the data without losing late writes
 
 1. **Count the key types** with `SCAN` plus `TYPE`, and have an exporter for
-   every type present before calling a backup complete. `DUMP` is not served
-   over Upstash REST, so export by type: `GET`, `HGETALL`, `SMEMBERS`,
+   every type present before calling a backup complete. Upstash serves `DUMP`
+   over REST, but Valkey 8.1 rejected its payload on `RESTORE` (`ERR DUMP
+   payload version or checksum are wrong`, tested on a key from a real store),
+   so unless you have restored one key into your target first, export by type:
+   `GET`, `HGETALL`, `SMEMBERS`,
    `LRANGE 0 -1`, `ZRANGE 0 -1 WITHSCORES`, `XRANGE - +`, plus `PTTL`, with
    `Upstash-Encoding: base64` so binary values survive. Write backups with
    mode 0600. **Streams with consumer groups** need more than `XRANGE`:
