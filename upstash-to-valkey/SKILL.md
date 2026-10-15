@@ -144,7 +144,9 @@ registry, not Docker Hub at task start.
    mode 0600. **Streams with consumer groups** need more than `XRANGE`:
    record each group's name and last-delivered ID (`XINFO GROUPS <key>`) and
    recreate it on the target at that ID after the entries are restored
-   (`XGROUP CREATE <key> <group> <id>`), or consumers fail with `NOGROUP` or
+   (`XGROUP CREATE <key> <group> <id> MKSTREAM`: a stream whose entries were
+   all deleted still has its groups, and exports no entries to recreate the
+   key), or consumers fail with `NOGROUP` or
    skip and replay messages. Pending entries (delivered, not acknowledged)
    cannot be carried over by REST: pause the consumers and let them process or
    claim what is pending before the final export. Never `XACK` entries just to
@@ -193,8 +195,9 @@ registry, not Docker Hub at task start.
 - **Cloudflare blocks Python's default user agent** (403, Browser Integrity
   Check, error 1010). Every script that calls the endpoint sets its own.
 - **`kill 1` inside a container is not a crash test**: signals sent to PID 1
-  from inside its namespace are ignored unless the process handles them. Stop
-  the task, or `valkey-cli SHUTDOWN NOSAVE`.
+  from inside its namespace are ignored unless the process handles them
+  (`SIGKILL` included). Stopping the task or `valkey-cli SHUTDOWN NOSAVE`
+  replaces it, but both flush first; section 6 has what an abrupt test needs.
 - **ECS Exec from a script blocks** until the interactive session ends; time a
   process-exit test from the endpoint, not from the exec call.
 - **A Workers Free plan CPU limit** looks like a Redis problem (intermittent
@@ -208,8 +211,16 @@ uses. When it answers again, check the canary and that no key without an
 expiry went missing. Run it once per change, with `python3 -u` so the timeline
 prints as it happens:
 
-- `ecs stop-task` (what a host failure or a deploy looks like),
-- the store process exiting (`valkey-cli SHUTDOWN NOSAVE` via ECS Exec),
+- `ecs stop-task` (a graceful stop: SIGTERM, as a deploy does),
+- the store process exiting (`valkey-cli SHUTDOWN NOSAVE` via ECS Exec; it
+  still flushes the append-only file, so it is not abrupt either),
+- an abrupt kill, which is the only test of the one-second loss window: on
+  Fargate this needs a way to SIGKILL Valkey, such as a shared process
+  namespace (`pidMode: task`) and `kill -9` from another container through ECS
+  Exec, or a staging copy started with `--enable-debug-command local` and
+  `DEBUG SEGFAULT`. Never enable the debug command in production: the REST
+  front passes commands through, so any token holder could crash the store.
+  The 74 s above did not include this test,
 - the alert path: the probe's alarm fires when the endpoint stays down for its
   evaluation window, and reaches someone who confirmed the subscription.
 
