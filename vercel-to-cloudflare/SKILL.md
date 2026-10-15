@@ -84,11 +84,11 @@ export default {
     // runtime cancels what the pass still has in flight, so the deadline is
     // a real cut-off, as maxDuration was.
     const passCtx = { waitUntil() {}, passThroughOnException() {} };
-    let timer;
-    const deadline = new Promise((_, reject) => {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const deadline = new Promise<never>((_, reject) => {
       timer = setTimeout(() => reject(new Error("cron deadline")), DEADLINE_MS);
     });
-    const pass = handler.fetch(req, env, passCtx).then(async (res) => {
+    const pass = handler.fetch(req, env, passCtx).then(async (res: Response) => {
       await res.text(); // the body too: a streamed response is still running
       if (!res.ok) throw new Error(`cron answered ${res.status}`);
     });
@@ -239,8 +239,9 @@ Each line cost a review round or a broken production before it was written down.
   `fetch`, and set the Vercel header the app reads from `request.cf`
   (`x-vercel-ip-timezone` from `request.cf.timezone`) after deleting any
   client-sent value. Static assets bypass the worker unless `run_worker_first`
-  is set, so they are served on http and www as they are; the zone's Always
-  Use HTTPS covers that, if the token may change zone settings.
+  is set, so they are served on http and on www as they are. The zone's Always
+  Use HTTPS covers http only; www to the apex needs a redirect rule (or
+  `run_worker_first`), and both need a token that may change the zone.
 - **Vercel Analytics.** Render `<Analytics />` only when `process.env.VERCEL`
   is set; on a Worker its `/_vercel/insights` requests 404.
 - **Marketplace storage dies with the team.** Upstash stores created through
@@ -258,16 +259,30 @@ Each line cost a review round or a broken production before it was written down.
   behind Vercel's own login and has no custom domain serves only the team; the
   Access-protected staging Worker already replaces it. Check environment
   variables nothing reads before you rescue them.
-- **Prove the edge before you proxy.** Ask any Cloudflare address for the
+- **Check the edge certificate, twice.** Asking a Cloudflare address for the
   hostname's certificate (`openssl s_client -connect <cloudflare-ip>:443
-  -servername <host>`). Universal SSL covers the apex and `www` before the
-  records are proxied.
+  -servername <host>`) showed the zone's Universal SSL certificate (apex and
+  `*.`) before the records were proxied, but Cloudflare documents serving it
+  for proxied records only, so treat that as a hint and check again the moment
+  the record is proxied.
 - **Compare right after the switch.** Vercel keeps answering for the hostname
   until the project is gone, so compare status codes path by path:
   `curl https://<host>/<path>` against
   `curl --resolve <host>:443:<vercel-ip> https://<host>/<path>`.
 - **Permissions per zone.** The token that creates Workers routes needs Workers
   Routes on each zone. Granting it is a change to that token's own policies.
+- **Data before secrets.** A cron trigger starts working the moment its Worker
+  has its secrets. When the store moves too, restore the data into the new
+  store first, then load the secrets, then switch the domain: a first pass
+  against an empty store sees no subscribers and no "already sent" records.
+  Back up the old store again immediately before the restore, from the
+  credential version that still points at it.
+- **A self-hosted Upstash replacement works.** Valkey behind
+  serverless-redis-http, published through a Cloudflare Tunnel (no inbound
+  port), served `@upstash/redis` unchanged: `/pipeline`, `/multi-exec` and the
+  `Upstash-Encoding: base64` responses the client asks for. Give each
+  environment its own REST token and database number, and check that a wrong
+  token is refused.
 - **Compressed soak.** Step 8's soak shrinks to nothing when the team is going
   away. The route and the proxied record keep working after Vercel is gone, but
   the rollback ends with the project: say so when you cut over.
