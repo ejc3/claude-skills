@@ -286,7 +286,13 @@ Each line cost a review round or a broken production before it was written down.
   store first, then load the secrets, then switch the domain: a first pass
   against an empty store sees no subscribers and no "already sent" records.
   Back up the old store again immediately before the restore, from the
-  credential version that still points at it.
+  credential version that still points at it. Old writers keep writing until
+  the switch and for the DNS TTL after it (Vercel serving cached clients, a
+  scheduled job still holding the old credentials), so either pause them, or
+  reconcile afterwards: export the old store again, diff it against the final
+  backup, copy each changed key the new store has not rewritten since the
+  restore, and merge hashes field by field (`HSETNX`). Keep the old store until
+  that diff is empty or explained.
 - **A self-hosted Upstash replacement works.** Valkey behind
   serverless-redis-http, published through a Cloudflare Tunnel (no inbound
   port), served `@upstash/redis` unchanged: `/pipeline`, `/multi-exec` and the
