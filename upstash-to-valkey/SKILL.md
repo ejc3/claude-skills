@@ -1,6 +1,6 @@
 ---
 name: upstash-to-valkey
-description: Move a Redis off Upstash (including a store created through the Vercel Marketplace) to Valkey you run yourself, without changing application code, or decide not to. Options compared with October 2026 prices (Upstash free and pay-as-you-go, Upstash through AWS Marketplace, ElastiCache, one EC2 instance, ECS Fargate with EFS); measured latency and failover benchmarks; the serverless-redis-http front that keeps @upstash/redis working and the two fixes it needs; an ECS task design tuned from a 108 s to a 74 s failover; a backup-restore-reconcile procedure over REST that loses no late writes; a failover test; and the pitfalls hit on a real production move. Use when retiring a Vercel team that owns an Upstash store, choosing where a small Redis should live, self-hosting an Upstash-compatible endpoint, or testing and tuning its failover.
+description: Move a Redis off Upstash (including a store created through the Vercel Marketplace) to Valkey you run yourself, without changing application code, or decide not to. Options compared with October 2026 prices (Upstash free and pay-as-you-go, Upstash through AWS Marketplace, ElastiCache, one EC2 instance, ECS Fargate with EFS); measured latency and failover benchmarks; the serverless-redis-http front that keeps @upstash/redis working and the two fixes it needs; an ECS task design tuned from a 108 s to a 74 s failover; a backup-restore-reconcile procedure over REST that fences the old store so late writes are not lost; a failover test; and the pitfalls hit on a real production move. Use when retiring a Vercel team that owns an Upstash store, choosing where a small Redis should live, self-hosting an Upstash-compatible endpoint, or testing and tuning its failover.
 ---
 
 # Upstash to Valkey
@@ -26,9 +26,10 @@ Ask what forces the move before choosing a destination:
   deletes it. Retiring the team means moving the data first, but not
   necessarily off Upstash: a new Upstash database in an account you own is
   the smallest move.
-- **Requests over 10 MB.** Upstash's request limit is 10 MB (50 MB on an
-  $80/month plan). A hash or JSON value written in one command above that
-  fails.
+- **Requests over 10 MB.** Upstash's request limit is 10 MB on Free,
+  pay-as-you-go and the small fixed plans; larger requests start at 20 MB on
+  the $100/month Fixed 5 GB plan (50 MB is $400/month). A hash or JSON value
+  written in one command above the limit fails.
 - **Data in your own cloud account**, or a cluster you want for other services
   anyway.
 
@@ -41,14 +42,17 @@ Check your region and the current price pages before quoting.
 | Upstash free | $0, but capped at 500k commands a month | managed | yes | none |
 | Upstash pay-as-you-go | **~$2** ($0.20 per 100k commands) | managed, replicated | yes | none |
 | Upstash through AWS Marketplace | same usage, on the AWS invoice | managed | yes | none |
-| ElastiCache (Valkey) | ~$12 for cache.t4g.micro, **plus** a proxy | managed Multi-AZ | no: VPC only, so SRH and a tunnel are needed anyway | the proxy |
+| ElastiCache (Valkey), one node | ~$12 (cache.t4g.micro), **plus** a proxy | none automatic: a single node has no replica to fail over to | no: VPC only, so SRH and a tunnel are needed anyway | the proxy |
+| ElastiCache (Valkey), Multi-AZ | ~$24 (primary and a replica in another zone), **plus** a proxy | managed automatic failover | same | the proxy |
 | One EC2 instance (t4g.micro, Docker) | ~$11 | none: down until someone restarts it | through a tunnel | OS, images, patches |
-| ECS Fargate + EFS | ~$21-25 (0.5 vCPU / 1 GB ARM task ~$16.60, public IPv4 $3.65, EFS cents, logs) | task replaced automatically, **~75 s** measured, any zone | through a tunnel | images only |
+| ECS Fargate + EFS | ~$21-25 (0.5 vCPU / 1 GB ARM task ~$16.60, public IPv4 $3.65, EFS cents, logs) | task replaced automatically, any zone; **74 s** measured for a stopped task | through a tunnel | images only |
 
 **Default recommendation:** Upstash pay-as-you-go in an account you own, in
 your callers' region. It is cheaper, managed and replicated. Self-host only
-for one of the reasons above, and say plainly what it costs: one node, a
-~75 s gap on any failure or deploy, and images to keep current.
+for one of the reasons above, and say plainly what it costs: one copy of the
+data (up to about a second of writes lost if the process dies abruptly, see
+section 3), a gap of a minute or more on a failure or deploy (74 s measured
+for a stopped task), and images to keep current.
 
 ## 2. Benchmarks to quote (and how they were taken)
 
@@ -63,8 +67,11 @@ Latency, from an EC2 instance in us-west-1, `PING` plus `GET` of a 260 KB key,
 That gap is mostly region, not product: an Upstash database in the callers'
 region closes most of it. Do not present it as an Upstash benchmark.
 
-Failover of a single-task ECS service, measured from `ecs stop-task` to the
-public endpoint answering, polling every 2 s (method in section 6):
+Failover of a single-task ECS service, measured from `ecs stop-task` (a
+graceful stop: SIGTERM, then the replacement) to the public endpoint answering,
+polling every 2 s (method in section 6). An abrupt failure (the host or the
+process dying) follows the same replacement path but was not timed; measure it
+before quoting a number for it.
 
 | Task design | Outage |
 |---|---|
@@ -73,12 +80,12 @@ public endpoint answering, polling every 2 s (method in section 6):
 | + 2 s `stopTimeout` on the stateless containers | 89 s: no change |
 | no `dependsOn`, checks every 5 s | **74 s** |
 
-Where the 74 s goes: old task's containers stop in 2 s; Fargate takes ~38 s to
-tear the old task down before it places the replacement; the new task takes
-~36 s (network interface, image pull, EFS mount, start). None of that is
-configurable, so ~75 s is the floor for one task. Lower needs a hot standby
-with its own storage and a promotion step: that is what the managed options
-sell.
+Where the 74 s went: the old task's containers stopped in 2 s; Fargate took
+~38 s to tear the old task down before placing the replacement; the new task
+took ~36 s (network interface, image pull, EFS mount, start). No task setting
+moved those two Fargate phases, and they vary from run to run, so treat ~75 s
+as what one task achieved here, not a guarantee. Lower needs a hot standby with
+its own storage and a promotion step: that is what the managed options sell.
 
 ## 3. The self-hosted shape
 
@@ -114,9 +121,15 @@ registry, not Docker Hub at task start.
   Valkey loading its file, 30 s for SRH): a start period only forgives early
   failures and the first success ends it, so shortening it never makes anything
   faster.
-- **`stopTimeout` 60 s for Valkey**: SIGTERM makes it write a snapshot first,
-  and killing it mid-save on network storage is the one thing here that can
-  lose data. 2 s for the stateless containers.
+- **`stopTimeout` 60 s for Valkey**: on SIGTERM it flushes the append-only
+  file and writes a snapshot before exiting, so a graceful stop loses nothing
+  acknowledged; give it time on network storage. 2 s for the stateless
+  containers.
+- **Know the durability window.** With `appendfsync everysec`, an abrupt
+  failure (the host or the process dying, no SIGTERM) can lose about the last
+  second of acknowledged writes, and there is one copy. If that is not
+  acceptable, use `appendfsync always` (slower writes) or a replicated or
+  managed store.
 
 ## 4. Move the data without losing late writes
 
@@ -124,9 +137,15 @@ registry, not Docker Hub at task start.
    every type present before calling a backup complete. `DUMP` is not served
    over Upstash REST, so export by type: `GET`, `HGETALL`, `SMEMBERS`,
    `LRANGE 0 -1`, `ZRANGE 0 -1 WITHSCORES`, `XRANGE - +`, plus `PTTL`, with
-   `Upstash-Encoding: base64` so binary values survive. Stream consumer groups
-   and their pending entries are not in `XRANGE`: drain or acknowledge them
-   first. Write backups with mode 0600.
+   `Upstash-Encoding: base64` so binary values survive. Write backups with
+   mode 0600. **Streams with consumer groups** need more than `XRANGE`:
+   record each group's name and last-delivered ID (`XINFO GROUPS <key>`) and
+   recreate it on the target at that ID after the entries are restored
+   (`XGROUP CREATE <key> <group> <id>`), or consumers fail with `NOGROUP` or
+   skip and replay messages. Pending entries (delivered, not acknowledged)
+   cannot be carried over by REST: pause the consumers and let them process or
+   claim what is pending before the final export. Never `XACK` entries just to
+   empty the list; that drops work nobody finished.
 2. **Bring the new store up empty and probed** (on ECS, everything created with
    the task count at zero, then started).
 3. **Final export** from the old store, from the credential that still points
@@ -137,16 +156,20 @@ registry, not Docker Hub at task start.
    keys that expired meanwhile. Verify the count and every key's type.
 5. **Switch consumers** (application secrets, CI secrets, functions), right
    after the restore.
-6. **Reconcile.** Writers keep reaching the old store after the final export
-   (in-flight jobs, clients holding old credentials, the old platform serving
-   cached clients until its DNS expires). Export the old store again and diff
-   it three ways against the final export and the new store: a key changed only
-   in the old store is copied, one deleted only there is deleted, one changed on
-   both sides is decided by hand. Compare hashes field by field: `HGETALL`
-   order is not stable. On the measured move: 12 keys changed after the
-   export; 2 were copied, 10 were already newer in the new store.
-7. **Keep the old store** until that diff is empty and a day of traffic is
-   clean.
+6. **Fence the old store, then reconcile once.** Writers keep reaching the old
+   store after the final export (in-flight jobs, clients holding old
+   credentials, the old platform serving cached clients until its DNS
+   expires), and a diff taken while they still can write misses whatever
+   lands after it. So first stop all writes to the old store: rotate or revoke
+   its credentials (or pause every writer) once the consumers have switched.
+   Then export it one last time and diff three ways against the final export
+   and the new store: a key changed only in the old store is copied, one
+   deleted only there is deleted, one changed on both sides is decided by
+   hand. Compare hashes field by field: `HGETALL` order is not stable. On the
+   measured move: 12 keys changed after the export; 2 were copied, 10 were
+   already newer in the new store.
+7. **Keep the old store, read-only,** until that diff is applied and a day of
+   traffic is clean; only then delete it.
 
 ## 5. Pitfalls, each hit for real
 
