@@ -1,6 +1,6 @@
 ---
 name: vercel-to-cloudflare
-description: Move a Next.js site from Vercel to Cloudflare Workers, or run it on both while it moves. A feature-by-feature map from Vercel to Cloudflare (OpenNext, wrangler.jsonc, env and secrets, previews, cron, storage, ISR caches, images, middleware and proxy, waitUntil and after, OIDC, client-IP headers, firewall and Access, logs, domains and TLS, size and runtime limits) with the gotchas that break a site only on Workers; a staged strategy from a protected staging Worker to a domain cutover with one-step rollback; pre- and post-cutover checklists; and how to run several site conversions at once without them colliding. Use when porting a Vercel site to Cloudflare, adding a Cloudflare deploy beside Vercel, planning or executing a domain cutover, or coordinating several such moves.
+description: Move a Next.js site from Vercel to Cloudflare Workers, or run it on both while it moves. A feature-by-feature map from Vercel to Cloudflare (OpenNext, wrangler.jsonc, env and secrets, previews, cron, storage, ISR caches, images, middleware and proxy, waitUntil and after, OIDC, client-IP headers, firewall and Access, logs, domains and TLS, size and runtime limits) with the gotchas that break a site only on Workers; a staged strategy from a protected staging Worker to a domain cutover with one-step rollback; pre- and post-cutover checklists; how to run several site conversions at once without them colliding; and lessons from a move made under a deadline (data keyed by VERCEL_ENV, per-environment builds, migrations, cron time limits, Marketplace storage). Use when porting a Vercel site to Cloudflare, adding a Cloudflare deploy beside Vercel, planning or executing a domain cutover, or coordinating several such moves.
 ---
 
 # Vercel to Cloudflare
@@ -71,13 +71,32 @@ each other (the size limit is an example) and the newest page wins.
 // @ts-ignore: generated at build time
 import { default as handler } from "./.open-next/worker.js";
 
+// The route's maxDuration. Vercel killed the function there; a Worker does not.
+const DEADLINE_MS = 60_000;
+
 export default {
   fetch: handler.fetch,
   async scheduled(event, env, ctx) {
     const req = new Request("https://<site-host>/api/cron/<job>", {
       headers: { authorization: `Bearer ${env.CRON_SECRET}` },
     });
-    ctx.waitUntil(handler.fetch(req, env, ctx));
+    // No waitUntil: when this handler settles the invocation ends and the
+    // runtime cancels what the pass still has in flight, so the deadline is
+    // a real cut-off, as maxDuration was.
+    const passCtx = { waitUntil() {}, passThroughOnException() {} };
+    let timer;
+    const deadline = new Promise((_, reject) => {
+      timer = setTimeout(() => reject(new Error("cron deadline")), DEADLINE_MS);
+    });
+    const pass = handler.fetch(req, env, passCtx).then(async (res) => {
+      await res.text(); // the body too: a streamed response is still running
+      if (!res.ok) throw new Error(`cron answered ${res.status}`);
+    });
+    try {
+      await Promise.race([pass, deadline]);
+    } finally {
+      clearTimeout(timer);
+    }
   },
 } satisfies ExportedHandler<CloudflareEnv>;
 
@@ -91,6 +110,14 @@ network hop and no self-fetch flag. Keep the route's bearer check so a
 public request cannot trigger it. Map each `vercel.json` cron to one
 `triggers.crons` entry. A `scheduled` handler gets one cron string per event
 (`event.cron`), so switch on it when several jobs share the Worker.
+
+**Keep the time limit.** A job that takes a lock sized from `maxDuration`
+(say a 70 s lock for a 60 s function) relies on Vercel killing it at 60 s.
+`ctx.waitUntil(handler.fetch(...))` with no deadline lets a slow pass outlive
+its lock, and the next minute's pass then runs beside it. Race the pass
+against the deadline as above. Put the cron only in the production
+environment's `triggers`, and remove it from `vercel.json` in the same change,
+or Vercel keeps polling too.
 
 ## 2. Strategy
 
@@ -182,6 +209,68 @@ before starting anything serial:
 A row moves forward only when its step's "done when" is true. The cutover
 column is a lock: claim a window there before starting step 6, and clear it
 after section 4 passes.
+
+## 6. Lessons from a move under a deadline
+
+From retiring a Vercel team on a billing deadline: three sites, about two hours.
+Each line cost a review round or a broken production before it was written down.
+
+- **Data keyed by `VERCEL_ENV`.** Storage namespaces built from it
+  (`app:${VERCEL_ENV}:...`) read an empty namespace on a Worker, where it is
+  unset, and the site looks fine with no data. Set `VERCEL_ENV=production` in
+  the production Worker's `vars` *and* in its build's environment as a bridge,
+  and rename the prefixes later. Grep for `VERCEL` (not only `VERCEL_ENV`):
+  `process.env.VERCEL` gates self-pollers and analytics too.
+- **One build per Worker.** Staging and production from one workflow need two
+  builds when any `NEXT_PUBLIC_*` value differs (a VAPID public key, a feature
+  flag). Keep production's public values in their own CI variables
+  (`PROD_*`) and build the production job with them.
+- **Migrations in `npm run build` go quiet.** A build script that applies
+  database migrations when the database variables are set, and skips them
+  otherwise, skips them on a Worker build: the variables are Worker secrets,
+  loaded after the build. Give the production build job the database
+  credentials from a CI environment whose deployment policy admits `main` only,
+  and pin that in a workflow test.
+- **Self-pollers.** Code that starts its own interval loop when it is not on
+  Vercel (`instrumentation.ts`'s `register()`) runs in every Worker isolate.
+  Give it an explicit off switch and set it on every Worker.
+- **What Vercel's edge did for free.** www to the apex and http to https
+  (308), and geolocation headers. A custom worker can redo them: redirect in
+  `fetch`, and set the Vercel header the app reads from `request.cf`
+  (`x-vercel-ip-timezone` from `request.cf.timezone`) after deleting any
+  client-sent value. Static assets bypass the worker unless `run_worker_first`
+  is set, so they are served on http and www as they are; the zone's Always
+  Use HTTPS covers that, if the token may change zone settings.
+- **Vercel Analytics.** Render `<Analytics />` only when `process.env.VERCEL`
+  is set; on a Worker its `/_vercel/insights` requests 404.
+- **Marketplace storage dies with the team.** Upstash stores created through
+  the Vercel Marketplace cannot be transferred between Vercel teams (the
+  transfer feature listed Prisma, Neon and Supabase), and deleting the team
+  deletes them. Back up first, over REST: `DUMP` is not served there, so export
+  by type (`SCAN`, `TYPE`, then `GET` / `HGETALL` / `SMEMBERS` /
+  `LRANGE 0 -1` / `ZRANGE 0 -1 WITHSCORES`, plus `PTTL`). Any Redis behind
+  serverless-redis-http speaks Upstash's REST protocol, so `@upstash/redis`
+  code runs unchanged against a replacement.
+- **A required `Vercel` check.** Branch rules that require Vercel's status check
+  block every merge once the project is gone. Drop it from the required checks
+  when production moves.
+- **No public production, nothing to move.** A project whose production URL sits
+  behind Vercel's own login and has no custom domain serves only the team; the
+  Access-protected staging Worker already replaces it. Check environment
+  variables nothing reads before you rescue them.
+- **Prove the edge before you proxy.** Ask any Cloudflare address for the
+  hostname's certificate (`openssl s_client -connect <cloudflare-ip>:443
+  -servername <host>`). Universal SSL covers the apex and `www` before the
+  records are proxied.
+- **Compare right after the switch.** Vercel keeps answering for the hostname
+  until the project is gone, so compare status codes path by path:
+  `curl https://<host>/<path>` against
+  `curl --resolve <host>:443:<vercel-ip> https://<host>/<path>`.
+- **Permissions per zone.** The token that creates Workers routes needs Workers
+  Routes on each zone. Granting it is a change to that token's own policies.
+- **Compressed soak.** Step 8's soak shrinks to nothing when the team is going
+  away. The route and the proxied record keep working after Vercel is gone, but
+  the rollback ends with the project: say so when you cut over.
 
 ## References
 
