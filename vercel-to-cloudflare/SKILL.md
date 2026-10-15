@@ -197,7 +197,7 @@ cutover.
 
   ```bash
   now=$(($(date +%s)*1000))
-  curl -s -X POST "https://api.cloudflare.com/client/v4/accounts/$ACCOUNT_ID/workers/observability/telemetry/query" \
+  curl -s -X POST "https://api.cloudflare.com/client/v4/accounts/$CLOUDFLARE_ACCOUNT_ID/workers/observability/telemetry/query" \
     -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" -H "Content-Type: application/json" \
     -d '{"queryId":"adhoc","timeframe":{"from":'$((now-3600000))',"to":'$now'},"view":"calculations",
          "parameters":{"calculations":[{"operator":"count"}],
