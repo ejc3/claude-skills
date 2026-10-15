@@ -178,6 +178,8 @@ cutover.
 - [ ] `vercel.json` redirects, rewrites and headers have been moved into `next.config` or `_headers`.
 - [ ] Analytics: Vercel scripts gated off on the Worker, and the replacement installed.
 - [ ] Cloudflare's edge certificate covers the hostname. Universal SSL covers the apex and first-level subdomains; deeper names need an advanced certificate.
+- [ ] The account is on **Workers Paid**. Check the plan in the dashboard (Workers & Pages, Plans); don't infer it from a deploy that worked. A Free-plan Worker deploys and serves, and it kills any request that uses more than 10 ms of CPU. Most server-rendered pages need more than that, worst on a cold isolate. A staging Worker behind Access sees too few visits to show it. So view every dynamic route on staging several times, cold, then count its Workers Logs outcomes (query in section 4): any `exceededCpu` is a stop.
+- [ ] Tests that run after a production deploy still test production. A workflow triggered by Vercel's `deployment_status` (environment `Production`) keeps testing the Vercel deployment after the move, and stays green while visitors get the Worker. Run the same suite against the domain from the Worker's deploy job, and retire or relabel the Vercel-triggered one.
 - [ ] The route `<host>/*` exists on the production Worker and the record is still DNS-only. The Vercel deployment is current with `main`.
 
 ## 4. After cutover
@@ -191,6 +193,19 @@ cutover.
 - [ ] A rate-limited endpoint limits a single client, and does not limit everyone together.
 - [ ] Images render and resize. No 4xx on `/_next/image` or `/cdn-cgi/image`.
 - [ ] Workers Logs and error monitoring are flowing. CPU time and errors are watched for the first day.
+- [ ] Workers Logs are watched for the first day **by outcome per script** (`ok`, `exceededCpu`, `exceededMemory`, `exception`, `canceled`), not by curling a few pages. Resource-limit failures are intermittent: the same URL can return 200, then 503, then 200. The query endpoint takes a token with the Workers Observability permission; Cloudflare's API reference lists Write for it:
+
+  ```bash
+  now=$(($(date +%s)*1000))
+  curl -s -X POST "https://api.cloudflare.com/client/v4/accounts/$CLOUDFLARE_ACCOUNT_ID/workers/observability/telemetry/query" \
+    -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" -H "Content-Type: application/json" \
+    -d '{"queryId":"adhoc","timeframe":{"from":'$((now-3600000))',"to":'$now'},"view":"calculations",
+         "parameters":{"calculations":[{"operator":"count"}],
+         "groupBys":[{"type":"string","value":"$workers.scriptName"},{"type":"string","value":"$workers.outcome"}]}}'
+  ```
+
+  `"view":"events"` with a filter on `$workers.outcome` lists the failing URLs, each with its `cpuTimeMs`.
+- [ ] The Vercel deployment stays up, current and reachable at its own alias until a full day of clean outcomes. It is the rollback.
 - [ ] Vercel traffic for the hostname drops to zero within the TTL.
 
 ## 5. Keeping several running at once
@@ -317,6 +332,16 @@ Each line cost a review round or a broken production before it was written down.
   `Upstash-Encoding: base64` responses the client asks for. Give each
   environment its own REST token and database number, and check that a wrong
   token is refused.
+- **A cutover onto the Free plan.** One site moved its domain to a Worker on an
+  account still on Workers Free. Deploys succeeded, staging behind Access looked
+  fine, and the Vercel-triggered production tests stayed green, because they
+  still tested Vercel. Visitors then got intermittent **Error 1102, "Worker
+  exceeded resource limits"**: about 1 request in 9, on Home and other
+  server-rendered pages and their `?_rsc=` navigations. Workers Logs showed
+  outcome `exceededCpu` with `cpuTimeMs` at exactly 10, the Free limit. The fix
+  is the plan, not the code or the zone: Workers Paid raises the default to
+  30 s. The plan check and the outcome count in sections 3 and 4 exist because
+  of this.
 - **Compressed soak.** Step 8's soak shrinks to nothing when the team is going
   away. The route and the proxied record keep working after Vercel is gone, but
   the rollback ends with the project: say so when you cut over.
