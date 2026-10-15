@@ -93,11 +93,24 @@ export default {
     const deadline = new Promise<never>((_, reject) => {
       timer = setTimeout(() => reject(new Error("cron deadline")), DEADLINE_MS);
     });
-    const pass = handler.fetch(req, env, passCtx).then(async (res: Response) => {
-      await res.text(); // the body too: a streamed response is still running
-      if (!res.ok) throw new Error(`cron answered ${res.status}`);
-      while (registered.length) await Promise.all(registered.splice(0));
-    });
+    // Like the runtime's own waitUntil: every registered task settles, also
+    // when the request or another task fails; the first failure is reported.
+    const pass = (async () => {
+      let failure: unknown;
+      try {
+        const res = await handler.fetch(req, env, passCtx);
+        await res.text(); // the body too: a streamed response is still running
+        if (!res.ok) failure = new Error(`cron answered ${res.status}`);
+      } catch (e) {
+        failure = e;
+      }
+      while (registered.length) {
+        for (const r of await Promise.allSettled(registered.splice(0))) {
+          if (r.status === "rejected" && failure === undefined) failure = r.reason;
+        }
+      }
+      if (failure !== undefined) throw failure;
+    })();
     try {
       await Promise.race([pass, deadline]);
     } finally {
@@ -257,9 +270,11 @@ Each line cost a review round or a broken production before it was written down.
   deletes them. Back up first, over REST: `DUMP` is not served there, so export
   by type (`SCAN`, `TYPE`, then `GET` / `HGETALL` / `SMEMBERS` /
   `LRANGE 0 -1` / `ZRANGE 0 -1 WITHSCORES` / `XRANGE - +`, plus `PTTL`). A
-  stream's consumer groups are not in `XRANGE`; export them with
-  `XINFO GROUPS` or recreate them. Count the types first and refuse to call the
-  backup complete while any type has no exporter. Any Redis behind
+  stream with consumer groups is more than its entries: the groups' cursors and
+  pending (delivered, unacknowledged) entries are not in `XRANGE`, and
+  `XINFO GROUPS` gives only a count of the pending ones. Drain or acknowledge
+  pending deliveries before the move, or plan a replay. Count the types first
+  and refuse to call the backup complete while any type has no exporter. Any Redis behind
   serverless-redis-http speaks Upstash's REST protocol, so `@upstash/redis`
   code runs unchanged against a replacement.
 - **A required `Vercel` check.** Branch rules that require Vercel's status check
@@ -291,7 +306,10 @@ Each line cost a review round or a broken production before it was written down.
   scheduled job still holding the old credentials), so either pause them, or
   reconcile afterwards: export the old store again, diff it against the final
   backup, copy each changed key the new store has not rewritten since the
-  restore, and merge hashes field by field (`HSETNX`). Keep the old store until
+  restore, and merge hashes field by field: a field that changed in the old
+  store and still holds the backup's value in the new one is copied (`HSET`),
+  one changed on both sides is decided by hand. Compare values, not
+  `HGETALL` output, whose field order is not stable. Keep the old store until
   that diff is empty or explained.
 - **A self-hosted Upstash replacement works.** Valkey behind
   serverless-redis-http, published through a Cloudflare Tunnel (no inbound
