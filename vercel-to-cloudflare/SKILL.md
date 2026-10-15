@@ -193,7 +193,7 @@ cutover.
 - [ ] A rate-limited endpoint limits a single client, and does not limit everyone together.
 - [ ] Images render and resize. No 4xx on `/_next/image` or `/cdn-cgi/image`.
 - [ ] Workers Logs and error monitoring are flowing. CPU time and errors are watched for the first day.
-- [ ] Workers Logs are watched for the first day **by outcome per script** (`ok`, `exceededCpu`, `exceededMemory`, `exception`, `canceled`), not by curling a few pages. Resource-limit failures are intermittent: the same URL can return 200, then 503, then 200. A token with Workers Observability read is enough:
+- [ ] Workers Logs are watched for the first day **by outcome per script** (`ok`, `exceededCpu`, `exceededMemory`, `exception`, `canceled`), not by curling a few pages. Resource-limit failures are intermittent: the same URL can return 200, then 503, then 200. The query endpoint takes a token with the Workers Observability permission; Cloudflare's API reference lists Write for it:
 
   ```bash
   now=$(($(date +%s)*1000))
