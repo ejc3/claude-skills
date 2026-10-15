@@ -291,7 +291,9 @@ Each line cost a review round or a broken production before it was written down.
   pending deliveries before the move, or plan a replay. Count the types first
   and refuse to call the backup complete while any type has no exporter. Any Redis behind
   serverless-redis-http speaks Upstash's REST protocol, so `@upstash/redis`
-  code runs unchanged against a replacement.
+  code runs unchanged against a replacement. The `upstash-to-valkey` skill has
+  the options with prices, measured latency and failover, and the full
+  backup-restore-reconcile procedure.
 - **A required `Vercel` check.** Branch rules that require Vercel's status check
   block every merge once the project is gone. Drop it from the required checks
   when production moves.
@@ -331,7 +333,8 @@ Each line cost a review round or a broken production before it was written down.
   port), served `@upstash/redis` unchanged: `/pipeline`, `/multi-exec` and the
   `Upstash-Encoding: base64` responses the client asks for. Give each
   environment its own REST token and database number, and check that a wrong
-  token is refused.
+  token is refused. Its fixes, task design and failover numbers are in the
+  `upstash-to-valkey` skill.
 - **A cutover onto the Free plan.** One site moved its domain to a Worker on an
   account still on Workers Free. Deploys succeeded, staging behind Access looked
   fine, and the Vercel-triggered production tests stayed green, because they
