@@ -80,10 +80,15 @@ export default {
     const req = new Request("https://<site-host>/api/cron/<job>", {
       headers: { authorization: `Bearer ${env.CRON_SECRET}` },
     });
-    // No waitUntil: when this handler settles the invocation ends and the
-    // runtime cancels what the pass still has in flight, so the deadline is
-    // a real cut-off, as maxDuration was.
-    const passCtx = { waitUntil() {}, passThroughOnException() {} };
+    // Work the pass registers with waitUntil (after(), cache writes) is
+    // collected and awaited inside the deadline rather than handed to the
+    // runtime: when this handler settles the invocation ends and the runtime
+    // cancels what is still in flight, so the deadline is a real cut-off.
+    const registered: Promise<unknown>[] = [];
+    const passCtx = {
+      waitUntil(p: Promise<unknown>) { registered.push(p); },
+      passThroughOnException() {},
+    };
     let timer: ReturnType<typeof setTimeout> | undefined;
     const deadline = new Promise<never>((_, reject) => {
       timer = setTimeout(() => reject(new Error("cron deadline")), DEADLINE_MS);
@@ -91,6 +96,7 @@ export default {
     const pass = handler.fetch(req, env, passCtx).then(async (res: Response) => {
       await res.text(); // the body too: a streamed response is still running
       if (!res.ok) throw new Error(`cron answered ${res.status}`);
+      while (registered.length) await Promise.all(registered.splice(0));
     });
     try {
       await Promise.race([pass, deadline]);
@@ -114,8 +120,9 @@ public request cannot trigger it. Map each `vercel.json` cron to one
 **Keep the time limit.** A job that takes a lock sized from `maxDuration`
 (say a 70 s lock for a 60 s function) relies on Vercel killing it at 60 s.
 `ctx.waitUntil(handler.fetch(...))` with no deadline lets a slow pass outlive
-its lock, and the next minute's pass then runs beside it. Race the pass
-against the deadline as above. Put the cron only in the production
+its lock, and the next minute's pass then runs beside it. Race the pass, and
+whatever it registers with `waitUntil`, against the deadline as above; a no-op
+`waitUntil` would silently drop `after()` work. Put the cron only in the production
 environment's `triggers`, and remove it from `vercel.json` in the same change,
 or Vercel keeps polling too.
 
@@ -249,7 +256,10 @@ Each line cost a review round or a broken production before it was written down.
   transfer feature listed Prisma, Neon and Supabase), and deleting the team
   deletes them. Back up first, over REST: `DUMP` is not served there, so export
   by type (`SCAN`, `TYPE`, then `GET` / `HGETALL` / `SMEMBERS` /
-  `LRANGE 0 -1` / `ZRANGE 0 -1 WITHSCORES`, plus `PTTL`). Any Redis behind
+  `LRANGE 0 -1` / `ZRANGE 0 -1 WITHSCORES` / `XRANGE - +`, plus `PTTL`). A
+  stream's consumer groups are not in `XRANGE`; export them with
+  `XINFO GROUPS` or recreate them. Count the types first and refuse to call the
+  backup complete while any type has no exporter. Any Redis behind
   serverless-redis-http speaks Upstash's REST protocol, so `@upstash/redis`
   code runs unchanged against a replacement.
 - **A required `Vercel` check.** Branch rules that require Vercel's status check
