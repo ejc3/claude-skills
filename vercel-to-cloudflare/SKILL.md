@@ -282,8 +282,9 @@ Each line cost a review round or a broken production before it was written down.
 - **Marketplace storage dies with the team.** Upstash stores created through
   the Vercel Marketplace cannot be transferred between Vercel teams (the
   transfer feature listed Prisma, Neon and Supabase), and deleting the team
-  deletes them. Back up first, over REST: `DUMP` is not served there, so export
-  by type (`SCAN`, `TYPE`, then `GET` / `HGETALL` / `SMEMBERS` /
+  deletes them. Back up first, over REST. Upstash serves `DUMP` there, but
+  Valkey 8.1 rejects its payloads (`ERR DUMP payload version or checksum are
+  wrong`), so for a Valkey target export by type (`SCAN`, `TYPE`, then `GET` / `HGETALL` / `SMEMBERS` /
   `LRANGE 0 -1` / `ZRANGE 0 -1 WITHSCORES` / `XRANGE - +`, plus `PTTL`). A
   stream with consumer groups is more than its entries: the groups' cursors and
   pending (delivered, unacknowledged) entries are not in `XRANGE`, and
@@ -291,7 +292,9 @@ Each line cost a review round or a broken production before it was written down.
   pending deliveries before the move, or plan a replay. Count the types first
   and refuse to call the backup complete while any type has no exporter. Any Redis behind
   serverless-redis-http speaks Upstash's REST protocol, so `@upstash/redis`
-  code runs unchanged against a replacement.
+  code runs unchanged against a replacement. The [`upstash-to-valkey`](../upstash-to-valkey/SKILL.md) skill has
+  the options with prices, measured latency and failover, and the full
+  backup-restore-reconcile procedure.
 - **A required `Vercel` check.** Branch rules that require Vercel's status check
   block every merge once the project is gone. Drop it from the required checks
   when production moves.
@@ -331,7 +334,8 @@ Each line cost a review round or a broken production before it was written down.
   port), served `@upstash/redis` unchanged: `/pipeline`, `/multi-exec` and the
   `Upstash-Encoding: base64` responses the client asks for. Give each
   environment its own REST token and database number, and check that a wrong
-  token is refused.
+  token is refused. Its fixes, task design and failover numbers are in the
+  [`upstash-to-valkey`](../upstash-to-valkey/SKILL.md) skill.
 - **A cutover onto the Free plan.** One site moved its domain to a Worker on an
   account still on Workers Free. Deploys succeeded, staging behind Access looked
   fine, and the Vercel-triggered production tests stayed green, because they
