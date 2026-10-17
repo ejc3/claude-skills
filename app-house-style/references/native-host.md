@@ -1,6 +1,6 @@
 # The native host: SwiftUI over the TypeScript core in headless Hermes
 
-The pattern a reference app's `apps/ios` follows (read its README before building one). Swift holds no rule: a view renders a snapshot and
+The layout of `apps/ios`; when a reference app has one, its README wins over this file. Swift holds no rule: a view renders a snapshot and
 sends actions; a store decodes a snapshot; the host carries strings.
 
 ```
@@ -40,10 +40,9 @@ ClientStores ── BridgeEndpoint ── ClientHost             (<App>Kit, Host
 - The `Platform` interface in `client/src/platform.ts` is the only seam: storage (a JSON file
   in Application Support), clock, compute, keystore (Keychain, `ThisDeviceOnly`), location,
   wake lock, passkeys (`ASAuthorizationPlatformPublicKeyCredentialProvider`, PRF on iOS 18+).
-- Keep the core's dependencies runnable in Hermes: no `TextEncoder`/`TextDecoder` reliance
-  without a fallback, no `URLSearchParams` in portable code, pure-JS crypto (`@noble/*`).
+- Hermes is ECMAScript with little of the web platform: assume an API outside the language
+  (`TextEncoder`, `URLSearchParams`, `crypto`) is absent until the Hermes smoke test proves
+  it. The smoke test is the enforcer, not this list.
 - Checks without a Mac: `node scripts/smoke.mjs --hermes=<hermes>` and `swift test` in the Kit
   package on Linux (screens compile only where SwiftUI is). On a Mac, a UI-test screen tour
   screenshots every screen in light, dark and the largest text size before TestFlight.
-- A whole wall screen shown inside the app is a `WKWebView` of the web page, not a re-drawn
-  SwiftUI copy.
