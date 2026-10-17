@@ -98,6 +98,8 @@ one `Simplify:` line. Copy the reference app's workflow when there is one (this 
 repository's `.github/workflows/review-decision.yml` otherwise).
 
 Every `pull_request` workflow is PR code, the check included: GitHub loads the workflow file
-from the PR's merge commit, so a PR can rewrite it to run anything. Put workflows on the
-house's runners only in a private repository whose PR authors are all trusted. A public
-repository, or one that takes PRs from forks, runs them on GitHub-hosted runners.
+from the PR's merge commit, so a PR can rewrite it to run anything. The house's runners are
+fine as long as no drive-by non-contributor can trigger them: set "Approval for running fork
+pull request workflows" to all external contributors (API:
+`actions/permissions/fork-pr-contributor-approval` = `all_external_contributors`), keep the
+default `GITHUB_TOKEN` read-only, and keep deploy secrets in main-only environments.
