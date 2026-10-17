@@ -114,8 +114,9 @@ do; the app's own pages stay native.
   `<app>-stage` behind Cloudflare Access, and **a URL never exists before its gate does**.
 - **Secrets reach only reviewed, merged code:** deploy tokens live in a GitHub environment
   limited to `main`, and PRs never deploy.
-- **CI runs on our own runners**, registered before the first workflow. Never run untrusted
-  PR code (a public repository, a fork) on a runner that holds secrets; ask first.
+- **CI runs on our own runners**, registered before the first workflow, in private
+  repositories whose PR authors are all trusted. A `pull_request` workflow file comes from
+  the PR itself, so a public repository or one taking fork PRs uses GitHub-hosted runners.
 - **Infrastructure is code in its own repository, changed by PR** and applied by whoever the
   local file names. Secrets live in a secrets manager; never commit or print one.
 - **Show the user a draft** by publishing it behind the access gate with the tool the local

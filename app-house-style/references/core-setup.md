@@ -94,6 +94,10 @@ running `npm ci`, lint, typecheck, test (and the web build). It may skip drafts
 and without `ready_for_review` a PR marked ready with no new push merges with CI never run.
 
 Add a `review decision` check: it fails unless the PR body has exactly one `Code-Review:` and
-one `Simplify:` line, and it reads only the PR body, so it runs no PR code. Copy the reference
-app's workflow when there is one (this skills repository's
-`.github/workflows/review-decision.yml` otherwise), with `runs-on` set to the house's runners.
+one `Simplify:` line. Copy the reference app's workflow when there is one (this skills
+repository's `.github/workflows/review-decision.yml` otherwise).
+
+Every `pull_request` workflow is PR code, the check included: GitHub loads the workflow file
+from the PR's merge commit, so a PR can rewrite it to run anything. Put workflows on the
+house's runners only in a private repository whose PR authors are all trusted. A public
+repository, or one that takes PRs from forks, runs them on GitHub-hosted runners.
