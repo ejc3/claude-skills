@@ -12,6 +12,7 @@ templates it uses.
 | [`docs-design-pass`](docs-design-pass/SKILL.md) | Raising a repository's charts, figures and prose to the standard of a well-made technical paper without changing a measured value: design counsel first, a shared style kit, stacked PRs, a phone-readable text alternative for every rasterized chart, prose cut to one statement per finding, parallel independent review with red tests for every accepted defect, and a merge gate on bot reviews and adjudicated findings. |
 | [`apple-hig-review`](apple-hig-review/SKILL.md) | Comparing an Apple-platform app with the current Human Interface Guidelines (iOS, iPadOS, macOS and the rest), or a web app as it runs in mobile Safari and Chrome against WCAG 2.2 and each platform's conventions: real screenshots first, findings resting on authoritative sources, parallel reviewers that each own one area and research the current guidelines, cited file:line findings ranked by severity with verified facts kept apart from judgment, one consolidated report, and stacked fixes checked on a device. |
 | [`mobile-safari`](mobile-safari/SKILL.md) | Building a website people use on phones, iPhone Safari above all: AutoFill (autocomplete tokens and sections, `insertReplacementText` versus spelling corrections, lookups that race or land late), input zoom, sideways scroll, `dvh` and safe areas, touch and hover, home-screen installs and their separate storage, location and stale first fixes, the screen wake lock across sleep, background tabs, slow phones, and how to test each with Playwright's WebKit and the iOS Simulator. |
+| [`app-house-style`](app-house-style/SKILL.md) | Building an app in one consistent house style: a shareable TypeScript core (engine and client, with no platform, clock or randomness in them, enforced by lint) under thin hosts, native SwiftUI over the core in headless Hermes on phones, web pages for wall and kiosk screens, Astryx for interactive web pages, every visible word composed in the core, a design doc and stacked draft PRs, two independent reviews for security work, and Cloudflare Workers with an Access-gated staging copy. Owner-specific names go in a local file the skill reads first. |
 
 ## Install
 
@@ -25,6 +26,7 @@ ln -s ~/claude-skills/docs-design-pass ~/.claude/skills/docs-design-pass
 ln -s ~/claude-skills/apple-hig-review ~/.claude/skills/apple-hig-review
 ln -s ~/claude-skills/mobile-safari ~/.claude/skills/mobile-safari
 ln -s ~/claude-skills/upstash-to-valkey ~/.claude/skills/upstash-to-valkey
+ln -s ~/claude-skills/app-house-style ~/.claude/skills/app-house-style
 ```
 
 Claude Code picks up skills in `~/.claude/skills` at the start of a session.
