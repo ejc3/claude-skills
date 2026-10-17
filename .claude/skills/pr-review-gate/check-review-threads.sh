@@ -372,10 +372,21 @@ Codex Review: Something went wrong.
 Security review completed. No security issues were found in this pull request.
 You have reached your Codex usage limits"}
 
+# Where a verdict line starts. The connector now opens its receipts with a marker line
+# (`<!-- codex-review-receipt:v1 -->`, then a blank line), so the verdict is no longer
+# the first thing in the body and every anchored match below missed it (issue #17).
+# Exactly one copy of that exact marker, and the whitespace after it, is skipped. Nothing
+# else is: any other text before the verdict, another HTML comment included, still
+# counts as preceding it, for the reason the CONNECTOR_VERDICTS note gives.
+RECEIPT_MARKER='<!-- codex-review-receipt:v1 -->'
+VERDICT_LEAD='def verdict_lead($marker): ltrimstr(" ")
+  | if startswith($marker) then ltrimstr($marker) | sub("^\\s+"; "") else . end;'
+
 prauthor=$(jq -r '.data.repository.pullRequest.author.login // ""' <<<"$payload" 2>/dev/null)
 bodies=$(jq -s --arg ignore "$IGNORED_COMMENT_AUTHORS" --arg trig "$TRIGGER_RE" \
    --arg noticeauth "$NOTICE_AUTHORS" --arg verdicts "$CONNECTOR_VERDICTS" \
-   '   ($ignore | split(",")) as $skip
+   --arg marker "$RECEIPT_MARKER" \
+   "$VERDICT_LEAD"'   ($ignore | split(",")) as $skip
   | ($noticeauth | split(",")) as $noticeskip
   | (.[0] | map({author, state, body, at: .submittedAt,
                  claimable: ((.state // "COMMENTED") != "APPROVED")}))
@@ -386,7 +397,7 @@ bodies=$(jq -s --arg ignore "$IGNORED_COMMENT_AUTHORS" --arg trig "$TRIGGER_RE" 
                                    and (($verdicts | split("\n")) as $v
                                         | [ $v[] | select(. != "")
                                             | . as $lead
-                                            | (($item.body // "") | ltrimstr(" ") | startswith($lead)) ]
+                                            | (($item.body // "") | verdict_lead($marker) | startswith($lead)) ]
                                         | any)) | not))}))' \
          <(echo "$reviews") <(echo "$prcomments")) || {
   echo "verdict: BLOCKED — could not merge PR-level bodies." >&2; exit 2; }
@@ -546,11 +557,11 @@ if [ "${REQUIRE_REVIEWED_HEAD:-1}" = "1" ] && [ -n "$headoid" ]; then
   # `select(.author.login != $me)` for the same reason the reviews path has it: a
   # connector that is ALSO the PR author would otherwise certify its own pushed head.
   covercomments=$(jq -r --arg noticeauth "$NOTICE_AUTHORS" --arg me "$prauthor" \
-    --arg cov "$COVERAGE_VERDICTS" \
-    '($noticeauth | split(",")) as $auth
+    --arg cov "$COVERAGE_VERDICTS" --arg marker "$RECEIPT_MARKER" \
+    "$VERDICT_LEAD"'($noticeauth | split(",")) as $auth
      | ($cov | split("\n") | map(select(. != ""))) as $covlead
      | [ .[] | select(.author.login | IN($auth[])) | select(.author.login != $me)
-       | select([ $covlead[] as $l | ((.body // "") | ltrimstr(" ") | startswith($l)) ] | any)
+       | select([ $covlead[] as $l | ((.body // "") | verdict_lead($marker) | startswith($l)) ] | any)
        | (.body // "" | capture("\\*\\*Reviewed commit:\\*\\* `(?<sha>[0-9a-f]{7,40})`") // empty)
        | .sha ]' <<<"$prcomments") || {
     echo "verdict: BLOCKED — could not read reviewed-commit markers from comments." >&2; exit 2; }
@@ -583,11 +594,11 @@ if [ "${REQUIRE_REVIEWED_HEAD:-1}" = "1" ] && [ -n "$headoid" ]; then
   # commit it read. That is exactly when to block: `reviewed` stays marker-based, so
   # coverage is still only claimed for a commit something actually named.
   anyresult=$(jq -r --arg noticeauth "$NOTICE_AUTHORS" --arg me "$prauthor" \
-    --arg cov "$ATTEMPT_VERDICTS" \
-    '($noticeauth | split(",")) as $auth
+    --arg cov "$ATTEMPT_VERDICTS" --arg marker "$RECEIPT_MARKER" \
+    "$VERDICT_LEAD"'($noticeauth | split(",")) as $auth
      | ($cov | split("\n") | map(select(. != ""))) as $covlead
      | [ .[] | select(.author.login | IN($auth[])) | select(.author.login != $me)
-       | select([ $covlead[] as $l | ((.body // "") | ltrimstr(" ") | startswith($l)) ] | any)
+       | select([ $covlead[] as $l | ((.body // "") | verdict_lead($marker) | startswith($l)) ] | any)
        ] | length' <<<"$prcomments") || {
     echo "verdict: BLOCKED — could not count code-review results." >&2; exit 2; }
   anyreview=$(( anyreview + anyresult ))

@@ -292,6 +292,32 @@ run_case "the quota notice is a verdict too" \
 run_case "an error notice is a verdict too" \
   "$(wrap4 me '[]' '[]' '[{"author":{"login":"chatgpt-codex-connector","__typename":"Bot"},"createdAt":"2026-01-01T00:00:00Z","body":"Codex Review: Something went wrong. Try again later by commenting @codex review.\n\n```\nUnknown error\n```"}]')" \
   0 "CLEAR"
+# Issue #17. The connector now opens its receipt with a marker line, so the verdict is no
+# longer the first thing in the body and every anchored match missed it: a head Codex had
+# read cleanly printed UNREVIEWED HEAD. Exactly that one marker (and the whitespace after
+# it) is skipped; anything else before the verdict still counts as preceding it.
+RECEIPT='<!-- codex-review-receipt:v1 -->\n\n'
+run_case "a clean receipt with the marker covers the head" \
+  "$(wrap6 deadbeef99 '[]' '[{"author":{"login":"chatgpt-codex-connector","__typename":"Bot"},"createdAt":"2026-01-01T00:00:00Z","body":"'"$RECEIPT$CLEANH"'"}]')" \
+  0 "CLEAR"
+run_case "a clean receipt with the marker on an OLD commit does not cover the head" \
+  "$(wrap6 deadbeef99 '[]' '[{"author":{"login":"chatgpt-codex-connector","__typename":"Bot"},"createdAt":"2026-01-01T00:00:00Z","body":"'"$RECEIPT$CLEANC"'"}]')" \
+  1 "UNREVIEWED HEAD"
+run_case "a clean receipt with the marker is not a finding" \
+  "$(wrap4 me '[]' '[]' '[{"author":{"login":"chatgpt-codex-connector","__typename":"Bot"},"createdAt":"2026-01-01T00:00:00Z","body":"'"$RECEIPT$CLEAN"' Keep them coming!\n\n**Reviewed commit:** `deadbeef99`"}]')" \
+  0 "CLEAR"
+run_case "an error receipt with the marker activates the head check" \
+  '{"data":{"repository":{"pullRequest":{"author":{"login":"me"},"headRefOid":"deadbeef99","reviewThreads":{"nodes":[]},"reviews":{"nodes":[]},"comments":{"nodes":[{"author":{"login":"chatgpt-codex-connector","__typename":"Bot"},"createdAt":"2026-01-02T00:00:00Z","body":"<!-- codex-review-receipt:v1 -->\n\nCodex Review: Something went wrong. Try again later by commenting @codex review."}]}}}}}' \
+  1 "UNREVIEWED HEAD"
+run_case "a claim between the marker and the verdict still blocks" \
+  "$(wrap4 me '[]' '[]' '[{"author":{"login":"chatgpt-codex-connector","__typename":"Bot"},"createdAt":"2026-01-01T00:00:00Z","body":"<!-- codex-review-receipt:v1 -->\nP1: this drops every row.\n\n'"$CLEAN"'"}]')" \
+  1 "BLOCKED"
+run_case "any other HTML comment before the verdict still blocks" \
+  "$(wrap4 me '[]' '[]' '[{"author":{"login":"chatgpt-codex-connector","__typename":"Bot"},"createdAt":"2026-01-01T00:00:00Z","body":"<!-- P1: this drops every row -->\n\n'"$CLEAN"'"}]')" \
+  1 "BLOCKED"
+run_case "the marker twice is not skipped twice" \
+  "$(wrap6 deadbeef99 '[]' '[{"author":{"login":"chatgpt-codex-connector","__typename":"Bot"},"createdAt":"2026-01-01T00:00:00Z","body":"'"$RECEIPT$RECEIPT$CLEANH"'"}]')" \
+  1 "BLOCKED"
 # The guards. A verdict must OPEN the comment, come from the connector, and not be a
 # review body -- a review carries a state, which is the signal there.
 run_case "a claim BEFORE the verdict line still blocks" \
