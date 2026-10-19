@@ -56,7 +56,7 @@ Run everything from the box that reaches the Mac; the person at the Mac does onl
    `script -q /tmp/claude-login.log claude auth login` in the background over SSH; the browser on the Mac opens the
    authorize page; **(at the Mac)** click Authorize; it finishes by itself (`claude auth status`).
 3. **Shared Claude pool** (if the owner runs one): its Mac setup script gives a `claude-pool` command.
-4. **Agent tools:** the repository's Mac tools installer (`mac-gui`, `mac-lease`, `mac-build`, shims, the `peekaboo`
+4. **Agent tools:** the Mac tools installer (`~/.claude/local.md` names where it lives) (`mac-gui`, `mac-lease`, `mac-build`, shims, the `peekaboo`
    wrapper; points `xcode-select` at Xcode).
 5. **Peekaboo:** copy `~/Applications/Peekaboo.app`, its CLI under `~/Library/Application Support/Peekaboo/` and its
    LaunchAgent (`open -g -a Peekaboo.app`) from a Mac that has them, fixing the home path. **(at the Mac)** grant
