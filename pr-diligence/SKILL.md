@@ -245,7 +245,11 @@ repository, so a stack cannot include a PR from a fork.
   of any existing PR that does not match the chain. To start a stack from
   scratch, use `gh stack init`, `add` and `submit`.
 - **Land through the top.** `gh stack merge <top-pr> --rebase` merges that PR
-  and every unmerged PR below it, bottom-up, in one all-or-nothing operation.
+  and every unmerged PR below it, bottom-up, in one operation. The checks
+  before it are all-or-nothing: if any PR fails them, none merges. A failure
+  during the merge stops it at that PR, though. The PRs below it stay landed,
+  and that PR and the ones above stay open. Afterwards, check every PR's state;
+  to continue, fix the failed PR and merge again.
   Landing a mid-stack PR also lands the PRs below it, and the PRs above
   retarget to the stack's base. A PR in the middle cannot land alone.
   - A bare number is read first as a stack number, then as a PR number. The two
@@ -263,10 +267,15 @@ repository, so a stack cannot include a PR from a fork.
   separate groups, and ejecting one also removes every PR above it. Watch the
   queue, not the command's exit status.
 - **Pin the heads.** `gh stack merge` has no `--match-head-commit`. The
-  documented stack-merge API takes the top's head SHA and cancels the merge if
-  that head moves first:
-  `gh api -X POST repos/<owner>/<repo>/pulls/<top>/merge-async -f sha=<top-sha> -f merge_method=rebase`.
-  That pins only the top. Just before merging, also check that each lower head
+  asynchronous merge API takes the top's head SHA and cancels the merge if that
+  head moves first: `gh api -X PUT
+  repos/<owner>/<repo>/pulls/<top>/merge-async -f sha=<top-sha>
+  -f merge_method=rebase`. A 202 answer only means the request was accepted.
+  Take the `uuid` it returns, then poll
+  `gh api repos/<owner>/<repo>/pulls/<top>/merge-async/<uuid>` until the status
+  is `merged`, `enqueued` (in a merge queue, not yet merged) or `failed`
+  (with a message). It stays `pending` while the merge runs. That pins only the
+  top. Just before merging, also check that each lower head
   is an ancestor of the top, and that CI ran on those exact SHAs.
 - **Review once, on the cumulative diff.** Each PR shows only its own layer, so
   a review of the top PR's diff covers only the top layer. Run the full suite
