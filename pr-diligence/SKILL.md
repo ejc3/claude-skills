@@ -258,9 +258,10 @@ repository, so a stack cannot include a PR from a fork.
     user's go-ahead for the whole stack, naming the PRs it will land.
 - **Requirements apply to every PR in the stack,** not only the top. Branch
   protection, approvals and CODEOWNERS are enforced on each PR, every PR below
-  the top needs passing checks, and the history must be linear. Rebase after
-  the trunk moves or a lower branch changes (`gh stack rebase` or
-  `gh stack sync`). `gh stack merge` cannot bypass requirements, and auto-merge
+  the top needs passing checks, and the history must be linear. After a lower
+  branch changes, run `gh stack rebase` and then `gh stack push`. `gh stack
+  sync` rebases only when the trunk has moved, so it leaves the upper branches
+  stale after a change lower down. `gh stack merge` cannot bypass requirements, and auto-merge
   is not supported for stacks.
 - **With a merge queue,** `gh stack merge` only enqueues the stack. The queue
   picks the merge method, so `--rebase` is ignored. The PRs may land in
@@ -278,11 +279,17 @@ repository, so a stack cannot include a PR from a fork.
   top. Just before merging, also check that each lower head
   is an ancestor of the top, and that CI ran on those exact SHAs.
 - **Review once, on the cumulative diff.** Each PR shows only its own layer, so
-  a review of the top PR's diff covers only the top layer. Run the full suite
-  and the head review once on the whole range, `trunk..top-head`, and fix
-  findings in one batch on top. That saves a round per layer without losing
-  coverage. Whatever the repository requires of each PR (approvals, checks,
-  resolved threads, a description line) is still required of each one.
+  a review of the top PR's diff covers only the top layer. Run the expensive
+  gates (the full suite, perf, the head review) once, on the whole range
+  `trunk..top-head`, and fix findings in one batch on top. That saves a round
+  per layer.
+  - A cumulative pass can miss a defect that a lower layer adds and a higher
+    one removes. And a merge that stops partway leaves the lower layers on the
+    trunk on their own.
+  - So every layer must still pass the repository's required checks at its own
+    head, which GitHub enforces on each PR.
+  - Whatever else the repository requires of each PR (approvals, resolved
+    threads, a description line) is still required of each one.
 - **A chain not registered as a GitHub stack** can land the same way by hand.
   Every lower PR must already have passed its own required checks and
   approvals. Retarget the top to the trunk, run
