@@ -290,10 +290,13 @@ repository, so a stack cannot include a PR from a fork.
     threads, a description line) is still required of each one.
 - **A chain not registered as a GitHub stack** can land the same way by hand.
   Every lower PR must already have passed its own required checks and
-  approvals. Retarget the top to the trunk, run
-  `gh pr merge <top> --rebase --match-head-commit <sha>`, and close the PRs
-  below with a pointer to the landed range. Do not retarget the top of a
-  registered stack, because that breaks the chain.
+  approvals. Record every lower PR's head SHA. Retarget the top to the
+  trunk and run `gh pr merge <top> --rebase --match-head-commit <sha>`. That
+  pins only the top. After it merges, compare each lower PR's head with the
+  one you recorded. Close those that match with a pointer to the landed
+  range, and leave any that changed open: its newest commits did not land.
+  Do not retarget the top of a registered stack, because that breaks the
+  chain.
 - **Before deleting a branch,** run `gh pr list --base <branch>` and retarget
   each PR found there. GitHub documents that deleting a merged PR's head branch
   retargets the PRs based on it. Still, a PR left on a deleted base can end up
