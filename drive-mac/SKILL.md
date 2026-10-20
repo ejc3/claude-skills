@@ -74,12 +74,14 @@ The person at the PC does one paste and sends one line back; everything else run
    artifact page cannot start a download). Wrap the whole script in `& { ... }`: pasted lines run one at a
    time, so a `throw` outside a block lets the rest run anyway. The script:
    - installs the SSH server (`Add-WindowsCapability -Online -Name OpenSSH.Server~~~~0.0.1.0`, silent for 2-10
-     minutes; tell the person to wait), then `Set-Service sshd -StartupType Automatic` and `Start-Service sshd`;
-   - closes it to the network: the install enables the firewall rule `OpenSSH-Server-In-TCP` (TCP 22) and the
-     server accepts passwords by default. Put `ListenAddress 127.0.0.1`, `PasswordAuthentication no` and
+     minutes; tell the person to wait). The install enables the firewall rule `OpenSSH-Server-In-TCP` (TCP 22)
+     and the server accepts passwords by default, so disable that rule **before** the first
+     `Start-Service sshd` (which creates `sshd_config` and the host keys), and `Set-Service sshd -StartupType
+     Automatic`;
+   - then closes the server itself: put `ListenAddress 127.0.0.1`, `PasswordAuthentication no` and
      `ChallengeResponseAuthentication no` (not its newer name `KbdInteractiveAuthentication`, which the OpenSSH
      8.1 of older Windows 10 builds rejects) before any `Match` block in `C:\ProgramData\ssh\sshd_config`, check it
-     with `sshd -t`, disable the rule, and restart `sshd`;
+     with `sshd -t` (restore the old file if it fails), and restart `sshd`;
    - makes Windows PowerShell the server's shell (`DefaultShell` under `HKLM:\SOFTWARE\OpenSSH`);
    - adds the box's public key to `C:\ProgramData\ssh\administrators_authorized_keys` (the only file sshd reads
      for an administrator; ACL Administrators and SYSTEM only) and to `~\.ssh\authorized_keys`;
@@ -87,7 +89,9 @@ The person at the PC does one paste and sends one line back; everything else run
      checks its `ExitCode` (one command-line string: on PowerShell 7.3+, `-N '""'` passes two quote characters
      as the passphrase);
    - pins the box's host key in a known_hosts file of its own, registers a logon task that loops
-     `ssh -N -R 127.0.0.1:<port>:127.0.0.1:22 -o BatchMode=yes -o ExitOnForwardFailure=yes` with a pause, and
+     `ssh -N -R 127.0.0.1:<port>:127.0.0.1:22 -o BatchMode=yes -o ExitOnForwardFailure=yes
+     -o ServerAliveInterval=30 -o ServerAliveCountMax=3` (so a link lost in sleep or a network change ends and
+     reconnects) with a pause, and
      starts it with `Start-ScheduledTask` (a logon trigger does not fire for the session already open);
    - prints the PC's public key and the user name, and copies them to the clipboard.
 2. **On the box:** claim the port in the port registry, then authorize the PC's key for the reverse forward
