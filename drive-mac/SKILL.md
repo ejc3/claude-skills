@@ -74,7 +74,8 @@ The person at the PC does one paste and sends one line back; everything else run
    artifact page cannot start a download). Wrap the whole script in `& { ... }`: pasted lines run one at a
    time, so a `throw` outside a block lets the rest run anyway. The script:
    - installs the SSH server (`Add-WindowsCapability -Online -Name OpenSSH.Server~~~~0.0.1.0`, silent for 2-10
-     minutes; tell the person to wait). The install enables the firewall rule `OpenSSH-Server-In-TCP` (TCP 22)
+     minutes; tell the person to wait), and the client (`OpenSSH.Client~~~~0.0.1.0`, a separate capability,
+     usually present but removable) when `ssh.exe` is missing. The install enables the firewall rule `OpenSSH-Server-In-TCP` (TCP 22)
      and the server accepts passwords by default, so disable that rule **before** the first
      `Start-Service sshd` (which creates `sshd_config` and the host keys), and `Set-Service sshd -StartupType
      Automatic`;
