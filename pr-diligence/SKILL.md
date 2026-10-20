@@ -1,6 +1,6 @@
 ---
 name: pr-diligence
-description: Prepare a pull request that someone else will judge, usually a fix sent to another project's maintainer, with the diligence that gets it taken. A regression test observed failing on the base and passing with the fix, in the builds the project's CI uses; a fix no bigger than the defect; a frozen review packet checked by parallel independent reviewers, then closure passes on the repairs; a scan for private values; plain PR text where every claim is checked; and a public walkthrough page of the code, generated from git and linked from the PR. Use when sending a fix upstream, opening a PR to a project you do not own, or when the user asks for a careful, reviewed, or walked-through pull request.
+description: Prepare a pull request that someone else will judge, usually a fix sent to another project's maintainer, with the diligence that gets it taken. A regression test observed failing on the base and passing with the fix, in the builds the project's CI uses; a fix no bigger than the defect; a frozen review packet checked by parallel independent reviewers, then closure passes on the repairs; a scan for private values; plain PR text where every claim is checked; and a public walkthrough page of the code, generated from git and linked from the PR. Also how to land a stack of PRs through its top PR, with GitHub's native stacked PRs (`gh stack`). Use when sending a fix upstream, opening a PR to a project you do not own, landing a stack of PRs, or when the user asks for a careful, reviewed, or walked-through pull request.
 ---
 
 # PR diligence
@@ -230,6 +230,81 @@ will find, such as its memory, and read them in section 1. Add a rule to
 section 2 only when it is more than one maintainer's taste: the same edit seen
 from more than one project, or a plain case of matching the code around it.
 Otherwise it is a fact about that project.
+
+## Stacks of PRs in one repository
+
+Work too big for one PR goes in a stack: each PR's base is the branch of the PR
+below it, and the bottom one targets the trunk. GitHub supports stacks natively
+(the `gh stack` extension, `gh extension install github/gh-stack`), and landing
+the top of a stack lands the whole stack. All the branches must be in one
+repository, so a stack cannot include a PR from a fork.
+
+- **Turn existing PRs into a stack** with `gh stack link 101 102 103`, bottom
+  to top (numbers, URLs or branch names). It needs no local stack state. It
+  pushes branch arguments, creates PRs that are missing, and corrects the base
+  of any existing PR that does not match the chain. To start a stack from
+  scratch, use `gh stack init`, `add` and `submit`.
+- **Land through the top.** `gh stack merge <top-pr> --rebase` merges that PR
+  and every unmerged PR below it, bottom-up, in one operation. The checks
+  before it are all-or-nothing: if any PR fails them, none merges. A failure
+  during the merge stops it at that PR, though. The PRs below it stay landed,
+  and that PR and the ones above stay open. Afterwards, check every PR's state;
+  to continue, fix the failed PR and merge again.
+  Landing a mid-stack PR also lands the PRs below it, and the PRs above
+  retarget to the stack's base. A PR in the middle cannot land alone.
+  - A bare number is read first as a stack number, then as a PR number. The two
+    never overlap.
+  - `--yes` merges every PR in the stack without a prompt. Use it only with the
+    user's go-ahead for the whole stack, naming the PRs it will land.
+- **Requirements apply to every PR in the stack,** not only the top. Branch
+  protection, approvals and CODEOWNERS are enforced on each PR, every PR below
+  the top needs passing checks, and the history must be linear. After a lower
+  branch changes, run `gh stack rebase` and then `gh stack push`. `gh stack merge` cannot bypass requirements, and auto-merge
+  is not supported for stacks.
+- **With a merge queue,** `gh stack merge` only enqueues the stack. The queue
+  picks the merge method, so `--rebase` is ignored. The PRs may land in
+  separate groups, and ejecting one also removes every PR above it. Watch the
+  queue, not the command's exit status.
+- **Pin the heads.** `gh stack merge` has no `--match-head-commit`. The
+  asynchronous merge API takes the top's head SHA and cancels the merge if that
+  head moves first: `gh api -X PUT
+  repos/<owner>/<repo>/pulls/<top>/merge-async -f sha=<top-sha>
+  -f merge_method=rebase`. A 202 answer only means the request was accepted.
+  Take the `uuid` it returns, then poll
+  `gh api repos/<owner>/<repo>/pulls/<top>/merge-async/<uuid>` until the status
+  is `merged`, `enqueued` (in a merge queue, not yet merged) or `failed`
+  (with a message). It stays `pending` while the merge runs. That pins only the
+  top. Just before merging, also check that each lower head
+  is an ancestor of the top, and that CI ran on those exact SHAs.
+- **Review once, on the cumulative diff.** Each PR shows only its own layer, so
+  a review of the top PR's diff covers only the top layer. Run the expensive
+  gates (the full suite, perf, the head review) once, on the whole range
+  `trunk..top-head`, and fix findings in one batch on top. That saves a round
+  per layer.
+  - A cumulative pass can miss a defect that a lower layer adds and a higher
+    one removes. And a merge that stops partway leaves the lower layers on the
+    trunk on their own.
+  - So every layer must still pass the repository's required checks at its own
+    head, which GitHub enforces on each PR.
+  - Whatever else the repository requires of each PR (approvals, resolved
+    threads, a description line) is still required of each one.
+- **A chain not registered as a GitHub stack** can land the same way by hand.
+  Every lower PR must already have passed its own required checks and
+  approvals. Record every lower PR's head SHA. Retarget the top to the
+  trunk and run `gh pr merge <top> --rebase --match-head-commit <sha>`. That
+  pins only the top. After it merges, compare each lower PR's head with the
+  one you recorded. Close those that match with a pointer to the landed
+  range, and leave any that changed open: its newest commits did not land.
+  Do not retarget the top of a registered stack, because that breaks the
+  chain.
+- **Before deleting a branch,** run `gh pr list --base <branch>` and retarget
+  each PR found there. GitHub documents that deleting a merged PR's head branch
+  retargets the PRs based on it. Still, a PR left on a deleted base can end up
+  closed, and one was, after a rebase merge.
+
+Docs: [About stacked pull requests](https://docs.github.com/en/pull-requests/get-started/about-stacked-prs),
+[Merging stacked pull requests](https://docs.github.com/en/enterprise-cloud@latest/pull-requests/how-tos/merge-and-close-pull-requests/merging-stacked-pull-requests),
+[CLI commands](https://docs.github.com/en/pull-requests/reference/stacked-prs-cli-commands).
 
 ## Working habits
 
