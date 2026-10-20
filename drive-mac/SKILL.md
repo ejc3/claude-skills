@@ -69,35 +69,46 @@ Run everything from the box that reaches the Mac; the person at the Mac does onl
 
 The person at the PC does one paste and sends one line back; everything else runs from the box.
 
-1. **Access: a reverse SSH tunnel to the box.** The PC dials out, so nothing opens inbound. Give the person one
-   PowerShell script for a window opened with **Run as administrator**, on a page with a Copy button (a page
-   cannot serve a download). Wrap the whole script in `& { ... }`: pasted lines run one at a time, so a `throw`
-   outside a block lets the rest run anyway. The script:
+1. **Access: a reverse SSH tunnel to the box.** The PC dials out, so no router port is opened. Give the
+   person one PowerShell script for a window opened with **Run as administrator**, behind a Copy button (an
+   artifact page cannot start a download). Wrap the whole script in `& { ... }`: pasted lines run one at a
+   time, so a `throw` outside a block lets the rest run anyway. The script:
    - installs the SSH server (`Add-WindowsCapability -Online -Name OpenSSH.Server~~~~0.0.1.0`, silent for 2-10
-     minutes; tell the person to wait) and makes Windows PowerShell its shell (`DefaultShell` under
-     `HKLM:\SOFTWARE\OpenSSH`);
+     minutes; tell the person to wait), then `Set-Service sshd -StartupType Automatic` and `Start-Service sshd`;
+   - closes it to the network: the install enables the firewall rule `OpenSSH-Server-In-TCP` (TCP 22) and the
+     server accepts passwords by default. Put `ListenAddress 127.0.0.1`, `PasswordAuthentication no` and
+     `KbdInteractiveAuthentication no` before any `Match` block in `C:\ProgramData\ssh\sshd_config`, check it
+     with `sshd -t`, disable the rule, and restart `sshd`;
+   - makes Windows PowerShell the server's shell (`DefaultShell` under `HKLM:\SOFTWARE\OpenSSH`);
    - adds the box's public key to `C:\ProgramData\ssh\administrators_authorized_keys` (the only file sshd reads
      for an administrator; ACL Administrators and SYSTEM only) and to `~\.ssh\authorized_keys`;
-   - makes the PC's own key with `Start-Process ssh-keygen -ArgumentList '... -N "" ...'` (one command-line
-     string: `-N '""'` passes two quote characters as the passphrase on PowerShell 7);
-   - pins the box's host key in a known_hosts file of its own, and registers a logon task that loops
-     `ssh -N -R 127.0.0.1:<port>:127.0.0.1:22 -o BatchMode=yes -o ExitOnForwardFailure=yes` with a pause;
+   - makes the PC's own key with `Start-Process ssh-keygen -Wait -PassThru -ArgumentList '... -N "" ...'` and
+     checks its `ExitCode` (one command-line string: on PowerShell 7.3+, `-N '""'` passes two quote characters
+     as the passphrase);
+   - pins the box's host key in a known_hosts file of its own, registers a logon task that loops
+     `ssh -N -R 127.0.0.1:<port>:127.0.0.1:22 -o BatchMode=yes -o ExitOnForwardFailure=yes` with a pause, and
+     starts it with `Start-ScheduledTask` (a logon trigger does not fire for the session already open);
    - prints the PC's public key and the user name, and copies them to the clipboard.
-2. **On the box:** claim the port in the port registry, then authorize the PC's key for that one forward:
-   `restrict,port-forwarding,permitlisten="127.0.0.1:<port>",command="/bin/false" ssh-ed25519 ...`. The tunnel
-   comes up by itself within seconds. Add an ssh alias (`HostName 127.0.0.1`, the port, a `HostKeyAlias`, its own
-   `UserKnownHostsFile`) and record it in `~/.claude/local.md`.
+2. **On the box:** claim the port in the port registry, then authorize the PC's key for the reverse forward
+   only: `restrict,port-forwarding,permitlisten="127.0.0.1:<port>",permitopen="127.0.0.1:1",command="/bin/false"
+   ssh-ed25519 ...`. `permitlisten` limits `-R`; without `permitopen` the key could also `-L`/`-D` from the box
+   (to its cloud metadata endpoint, say), and `permitopen="none"` makes sshd refuse the key outright. The tunnel
+   comes up by itself within seconds. Add an ssh alias (`HostName 127.0.0.1`, the port, a `HostKeyAlias`, its
+   own `UserKnownHostsFile`) and record it in `~/.claude/local.md`.
 3. **Running commands there:** the shell is Windows PowerShell 5.1.
    - Send a script as `powershell -NoProfile -NonInteractive -EncodedCommand <base64 of UTF-16LE>` and data on
      stdin (`[Console]::In.ReadToEnd()`): nothing needs quoting through ssh, and a secret never reaches a command
-     line.
+     line. `exit 1` or a `throw` comes back as ssh's exit status.
    - Set `$ProgressPreference = 'SilentlyContinue'`, or progress arrives as CLIXML on stderr.
-   - Under `$ErrorActionPreference = 'Stop'`, anything a native program writes to stderr raises
-     `NativeCommandError`: pipe it through `2>&1 | ForEach-Object { "$_" }` and check `$LASTEXITCODE`.
+   - Under `$ErrorActionPreference = 'Stop'`, a native program's stderr redirected with `2>&1` ends the
+     script. Run native programs with `'Continue'` and check `$LASTEXITCODE`.
    - Check PowerShell you send with `[System.Management.Automation.Language.Parser]::ParseInput` on the PC first.
+   - A process started from the SSH session dies with it. To restart `sshd` itself, start a one-off scheduled
+     task as `SYSTEM`, then delete it.
 4. **Claude Code CLI:** `irm https://claude.ai/install.ps1 | iex` installs into `%USERPROFILE%\.local\bin`, which
    is not on the PATH: add it to the user PATH (`[Environment]::SetEnvironmentVariable('Path', ..., 'User')`).
-   Sign-in as on a Mac (step 2 above).
-5. **Shared Claude pool** (if the owner runs one): its Windows setup script, run where the pool's secrets can be
-   read. The box itself may be denied the access token on purpose: ask for a token of the PC's own rather than
-   copying one from another machine.
+   Sign in with `claude auth login` over SSH; a browser may not open from an SSH session, so give the person the
+   URL it prints.
+5. **Shared Claude pool** (if the owner runs one): its Windows setup script. Give the PC an access token of its
+   own rather than copying another machine's, and switch the PC over only after a request through its tunnel
+   succeeds: the pool's agent fails closed.
