@@ -259,9 +259,7 @@ repository, so a stack cannot include a PR from a fork.
 - **Requirements apply to every PR in the stack,** not only the top. Branch
   protection, approvals and CODEOWNERS are enforced on each PR, every PR below
   the top needs passing checks, and the history must be linear. After a lower
-  branch changes, run `gh stack rebase` and then `gh stack push`. `gh stack
-  sync` rebases only when the trunk has moved, so it leaves the upper branches
-  stale after a change lower down. `gh stack merge` cannot bypass requirements, and auto-merge
+  branch changes, run `gh stack rebase` and then `gh stack push`. `gh stack merge` cannot bypass requirements, and auto-merge
   is not supported for stacks.
 - **With a merge queue,** `gh stack merge` only enqueues the stack. The queue
   picks the merge method, so `--rebase` is ignored. The PRs may land in
