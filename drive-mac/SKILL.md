@@ -77,7 +77,8 @@ The person at the PC does one paste and sends one line back; everything else run
      minutes; tell the person to wait), then `Set-Service sshd -StartupType Automatic` and `Start-Service sshd`;
    - closes it to the network: the install enables the firewall rule `OpenSSH-Server-In-TCP` (TCP 22) and the
      server accepts passwords by default. Put `ListenAddress 127.0.0.1`, `PasswordAuthentication no` and
-     `KbdInteractiveAuthentication no` before any `Match` block in `C:\ProgramData\ssh\sshd_config`, check it
+     `ChallengeResponseAuthentication no` (not its newer name `KbdInteractiveAuthentication`, which the OpenSSH
+     8.1 of older Windows 10 builds rejects) before any `Match` block in `C:\ProgramData\ssh\sshd_config`, check it
      with `sshd -t`, disable the rule, and restart `sshd`;
    - makes Windows PowerShell the server's shell (`DefaultShell` under `HKLM:\SOFTWARE\OpenSSH`);
    - adds the box's public key to `C:\ProgramData\ssh\administrators_authorized_keys` (the only file sshd reads
