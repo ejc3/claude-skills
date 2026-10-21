@@ -1,6 +1,6 @@
 ---
 name: pr-diligence
-description: Prepare a pull request that someone else will judge, usually a fix sent to another project's maintainer, with the diligence that gets it taken. A regression test observed failing on the base and passing with the fix, in the builds the project's CI uses; a fix no bigger than the defect; a frozen review packet checked by parallel independent reviewers, then closure passes on the repairs; a scan for private values; plain PR text where every claim is checked; and a public walkthrough page of the code, generated from git and linked from the PR. Also how to land a stack of PRs through its top PR, with GitHub's native stacked PRs (`gh stack`). Use when sending a fix upstream, opening a PR to a project you do not own, landing a stack of PRs, or when the user asks for a careful, reviewed, or walked-through pull request.
+description: Prepare a pull request that someone else will judge, usually a fix sent to another project's maintainer, with the diligence that gets it taken. A regression test observed failing on the base and passing with the fix, in the builds the project's CI uses; a fix no bigger than the defect; a frozen review packet checked by parallel independent reviewers, then closure passes on the repairs; a scan for private values; plain PR text where every claim is checked; and a public walkthrough page of the code, generated from git and linked from the PR. For fixes to lifetimes and ownership (leaks, use-after-free, frees added to queues and callbacks), an ownership table written before the fix and a review that lists every producer in the source. Also how to land a stack of PRs through its top PR, with GitHub's native stacked PRs (`gh stack`). Use when sending a fix upstream, opening a PR to a project you do not own, landing a stack of PRs, or when the user asks for a careful, reviewed, or walked-through pull request.
 ---
 
 # PR diligence
@@ -49,6 +49,8 @@ lead to check, not a fact to repeat.
   fix that also "corrected" a cursor column overwrote text; the reviewers
   caught it twice.)
 - Follow an idiom the codebase already uses for the same problem, and cite it.
+- A fix that decides when something is freed or kept also follows "Fixes to
+  lifetimes and ownership" below.
 - When a nearby condition already takes the same action (the same `break` or
   `return`, with nothing between them that the new case needs), add the new
   case to it instead of writing a second `if`. (A guard written as its own
@@ -230,6 +232,80 @@ will find, such as its memory, and read them in section 1. Add a rule to
 section 2 only when it is more than one maintainer's taste: the same edit seen
 from more than one project, or a plain case of matching the code around it.
 Otherwise it is a fact about that project.
+
+## Fixes to lifetimes and ownership
+
+This section is in addition to the rest, for one kind of change: a fix that
+decides when something is freed, cancelled or kept. Leak and use-after-free
+fixes qualify, as does anything that adds a free, a reference count, a deferred
+removal or a flush to a queue, a list of callbacks, a timer or a connection.
+Ordinary PRs skip it.
+
+Running scenarios does not prove these fixes. One fix freed 465 of 465 lost
+clients over 49 scenarios and 200 stress rounds, under the sanitizer, without
+an error. It still freed a queued command that another command (`source-file`)
+kept a pointer to, which would crash the server if the client went between two
+of its files. Only a reviewer told to list every producer in the source found
+it. The fix had grown by repairing each crash a scenario showed. No one had
+written down who owns a queued item and who else points at one.
+
+**Write the ownership table before the fix.** Put it in the packet as
+`design.md`, with one row per path:
+
+- each kind of object the change frees or keeps, and where it is created;
+- each producer that can put such an object where the change acts, found by
+  searching the source and cited by file and line (for a queue: every function
+  that makes an item wait, every caller of its continue function, every
+  function that appends or inserts);
+- each holder of a pointer to the object other than its owner (a saved
+  insertion point, a callback's data, an event set up for later), and what
+  that holder does after the object is gone;
+- for each row, what the change does with the object, and why it is freed
+  exactly once and never used afterwards.
+
+A row you cannot fill in from the source is an open question, and the bug is
+usually there; answer it before writing the fix. "Nothing reaches this" is a
+claim: cite the search that shows it.
+
+**When a repair is a reaction, check the table first.** If a change to the
+fix is made because a scenario crashed or a test broke, decide whether the code
+broke a row of the table or the table was missing one, and correct the table
+before the code. A second repair for the same kind of ownership mistake means
+the approach is wrong, not just the code.
+
+**Review by enumeration first.** One reviewer, preferably a different model,
+gets the table and the source. It checks each row and adds the ones that are
+missing: every producer, every pointer holder, work that a callback run by the
+fix adds to the same structure, and the order things are torn down in. The
+runtime reviewers then attack the rows, with mutants: the naive version of the
+fix, and the fix without each guard, must each fail a named check.
+
+**Ask whether the fix is enough, not only whether each part is needed.**
+Checking that every part of a fix earns its place says nothing about the cases
+it misses. The question for a port, a simplification or an inherited fix is
+which rows it leaves out.
+
+**When the right fix is a new mechanism, send an issue.** If a correct fix
+needs something the code does not have, such as a way to cancel a queued item
+and free what it holds, that design belongs to the maintainer. Send the
+reproducer, the leak or crash report, and two sentences on why the obvious
+fixes fail; do not send the half that works. In a long-running process a
+bounded leak is better than a rare crash.
+
+**Evidence** in addition to section 3: the failure on the base and its
+absence with the fix, from a copy-paste reproducer (for a leak, the sanitizer's
+leak report; for a use-after-free, its error); for a leak, a steady-state run
+of hundreds of events with the live heap flat; and, for every row of the table,
+a scenario that exercises it or the source lines that show it cannot happen.
+If no test mechanism the project has can see the defect (leak detection off in
+its sanitizer options, say), do not add the harness it removed: give the
+reproducer and its report, and say in the text that there is no regression
+test and why.
+
+If the fix came from a build that is already in use, check whether each
+finding applies to that build as well (a port or a simplification can differ
+from it), and tell the user which builds are affected and which are not yet
+checked.
 
 ## Stacks of PRs in one repository
 
