@@ -1,6 +1,6 @@
 ---
 name: pr-diligence
-description: Prepare a pull request that someone else will judge, usually a fix sent to another project's maintainer, with the diligence that gets it taken. A regression test observed failing on the base and passing with the fix, in the builds the project's CI uses; a fix no bigger than the defect; a frozen review packet checked by parallel independent reviewers, then closure passes on the repairs; a scan for private values; plain PR text where every claim is checked; and a public walkthrough page of the code, generated from git and linked from the PR. Also how to land a stack of PRs through its top PR, with GitHub's native stacked PRs (`gh stack`). Use when sending a fix upstream, opening a PR to a project you do not own, landing a stack of PRs, or when the user asks for a careful, reviewed, or walked-through pull request.
+description: Prepare a pull request that someone else will judge, usually a fix sent to another project's maintainer, with the diligence that gets it taken. A regression test observed failing on the base and passing with the fix, in the builds the project's CI uses; a fix no bigger than the defect; a frozen review packet checked by parallel independent reviewers, then closure passes on the repairs; a scan for private values; plain PR text where every claim is checked; and a public walkthrough page of the code, generated from git and linked from the PR. For fixes to lifetimes and ownership (leaks, use-after-free), an ownership table written before the fix and a review that lists every producer in the source. Also how to land a stack of PRs through its top PR, with GitHub's native stacked PRs (`gh stack`). Use when sending a fix upstream, opening a PR to a project you do not own, landing a stack of PRs, or when the user asks for a careful, reviewed, or walked-through pull request.
 ---
 
 # PR diligence
@@ -231,6 +231,67 @@ section 2 only when it is more than one maintainer's taste: the same edit seen
 from more than one project, or a plain case of matching the code around it.
 Otherwise it is a fact about that project.
 
+## Fixes to lifetimes and ownership
+
+Applies in addition to the rest, to a fix that decides when something is
+freed, cancelled or kept: leaks, use-after-free, and anything that adds a free,
+a reference count, a deferred removal or a flush to a queue, a list of
+callbacks, a timer or a connection. Other PRs skip it.
+
+Running scenarios does not prove these fixes. One fix freed 465 of 465 lost
+clients over 49 scenarios and 200 stress rounds, under the sanitizer, without
+an error. It still freed a queued command that another command (`source-file`)
+kept a pointer to. Only a reviewer told to list every producer in the source
+found it. The fix had grown by repairing each crash a scenario showed, with no
+written record of who owns a queued item.
+
+**Write the ownership table before the fix.** Put it in the packet as
+`design.md`, with one row per kind of object and producer, and these columns:
+
+- the object the change frees or keeps, and where it is created;
+- the producer that can put it where the change acts, found by searching the
+  source and cited by file and line (for a queue: every function that makes an
+  item wait, every caller of its continue function, every function that
+  appends or inserts);
+- each holder of a pointer to it other than its owner (a saved insertion
+  point, a callback's data, an event set up for later), and what that holder
+  does after the object is gone;
+- what the change does with it, and why it is freed exactly once and never
+  used afterwards.
+
+A row you cannot fill in from the source is an open question, and the bug is
+usually there; answer it before writing the fix. "Nothing reaches this" is a
+claim: cite the search that shows it.
+
+**When a repair is a reaction, check the table first.** If a change to the
+fix is made because a scenario crashed or a test broke, decide whether the
+code broke a row of the table or the table was missing one, and correct the
+table before the code.
+
+**Review the table, not only the code.** In the section 4 campaign, the
+different-model reviewer gets the table and the source, checks each row, and
+adds the ones that are missing: every producer, every pointer holder, work that
+a callback run by the fix adds to the same structure, and the order things are
+torn down in. The runtime reviewers attack the rows, with mutants: the naive
+version of the fix, and the fix without each guard, must each fail a named
+check. For a port, a simplification or an inherited fix, ask which rows it
+leaves out, not only whether each part is needed.
+
+**When the right fix is a new mechanism, design it; do not send the half that
+works.** If a correct fix needs something the code does not have, such as a
+way to cancel a queued item and free what it holds, design and test the
+mechanism like any other fix. Tell the user that it changes a design the
+maintainer owns, so they can choose between the PR and an issue first with the
+reproducer and two sentences on why the obvious fixes fail. In a long-running
+process a bounded leak is better than a rare crash.
+
+**Evidence** in addition to section 3: for a leak, a steady-state run of
+hundreds of events with the live heap flat; and, for every row of the table, a
+scenario that exercises it or the source lines that show it cannot happen. If
+no test mechanism the project has can see the defect (leak detection off in
+its sanitizer options, say), give the reproducer and the sanitizer's report,
+and say in the text that there is no regression test and why.
+
 ## Stacks of PRs in one repository
 
 Work too big for one PR goes in a stack: each PR's base is the branch of the PR
@@ -312,5 +373,8 @@ Docs: [About stacked pull requests](https://docs.github.com/en/pull-requests/get
   file when they finish.
 - Scratch files go in the checkout's `.scratch/` (git-ignored); large builds go
   on a scratch disk.
+- If a fix or a finding came from a build already in use, check whether it
+  applies to that build too (a port or a simplification can differ), and tell
+  the user which builds are affected and which are not yet checked.
 - Say what was verified and what was not. When a reviewer, a tool or your own
   earlier message turns out wrong, say so plainly and fix it.
