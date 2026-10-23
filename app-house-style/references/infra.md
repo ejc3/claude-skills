@@ -25,7 +25,7 @@ repository's newest example of each piece.
 
 ## Staging behind Access
 
-The flags, their reason and how CI gets through Access are in the `vercel-to-cloudflare`
+The flags, their reason and how CI gets through Access are in the `cloudflare`
 skill ("Staging Worker, protected first"). The order across repositories:
 
 1. Merge the app's deploy workflow with `workers_dev` and `preview_urls` false; the first

@@ -1,9 +1,9 @@
 ---
-name: vercel-to-cloudflare
-description: Move a Next.js site from Vercel to Cloudflare Workers, or run it on both while it moves. A feature-by-feature map from Vercel to Cloudflare (OpenNext, wrangler.jsonc, env and secrets, previews, cron, storage, ISR caches, images, middleware and proxy, waitUntil and after, OIDC, client-IP headers, firewall and Access, logs, domains and TLS, size and runtime limits) with the gotchas that break a site only on Workers; a staged strategy from a protected staging Worker to a domain cutover with one-step rollback; pre- and post-cutover checklists; how to run several site conversions at once without them colliding; and lessons from a move made under a deadline (data keyed by VERCEL_ENV, per-environment builds, migrations, cron time limits, Marketplace storage). Use when porting a Vercel site to Cloudflare, adding a Cloudflare deploy beside Vercel, planning or executing a domain cutover, or coordinating several such moves.
+name: cloudflare
+description: "Build, move and run a site on Cloudflare Workers. Moving a Next.js site from Vercel to Cloudflare Workers, or running it on both while it moves. A feature-by-feature map from Vercel to Cloudflare (OpenNext, wrangler.jsonc, env and secrets, previews, cron, storage, ISR caches, images, middleware and proxy, waitUntil and after, OIDC, client-IP headers, firewall and Access, logs, domains and TLS, size and runtime limits) with the gotchas that break a site only on Workers; a staged strategy from a protected staging Worker to a domain cutover with one-step rollback; pre- and post-cutover checklists; how to run several site conversions at once without them colliding; and lessons from a move made under a deadline (data keyed by VERCEL_ENV, per-environment builds, migrations, cron time limits, Marketplace storage). Running on Workers: the traps that break a Worker only in production, with Turso/libSQL as the worked case (I/O or promises shared across requests hang every later request in an isolate, outbound calls need a timeout, pages must not wait for ever, reading Workers Logs to tell a hang from an error, shipping a fix during an outage past branch rules and a busy CI pool) in workers-gotchas.md. Use when writing or reviewing Worker code that talks to a database or another API, when a Worker request hangs or is canceled, when diagnosing an outage from Workers Logs, when porting a Vercel site to Cloudflare, adding a Cloudflare deploy beside Vercel, planning or executing a domain cutover, or coordinating several such moves."
 ---
 
-# Vercel to Cloudflare
+# Cloudflare
 
 A Next.js site runs on Cloudflare Workers through the OpenNext adapter
 (`@opennextjs/cloudflare`). Most of a site moves unchanged. What breaks is
@@ -349,6 +349,10 @@ Each line cost a review round or a broken production before it was written down.
 - **Compressed soak.** Step 8's soak shrinks to nothing when the team is going
   away. The route and the proxied record keep working after Vercel is gone, but
   the rollback ends with the project: say so when you cut over.
+
+## 7. Running on Workers
+
+Once a site runs on Workers, read [`workers-gotchas.md`](workers-gotchas.md): the runtime traps a move does not show. It covers never sharing I/O or promises across requests, a timeout on every outbound call (Turso/libSQL as the worked case), pages that never wait for ever, reading Workers Logs to tell a hang from an error, and shipping a fix during an outage.
 
 ## References
 
