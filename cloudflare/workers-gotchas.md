@@ -47,9 +47,11 @@ export async function store() {
 Two requests may both run the migrations once at cold start. Write migrations so a second run is
 harmless: record each in a table inside the same batch, and treat "already applied" as success.
 
-Other module-level I/O to look for: `createRemoteJWKSet` from `jose` (it shares an in-flight
-fetch of the key set), memoised `fetch` promises, SDK clients that keep a connection or a stream
-open (WebSocket or HTTP/2 based), and anything created in a top-level `await`.
+Other module-level I/O to look for: memoised `fetch` promises, SDK clients that keep a
+connection or a stream open (WebSocket or HTTP/2 based), and anything created in a top-level
+`await`. A library may already handle this: current `jose` detects Workers and does not await
+another request's pending key-set fetch, so keep its `createRemoteJWKSet` at module level, with
+its key cache. Read the library's code or test it on Workers before assuming either way.
 
 ## 2. Put a timeout on every outbound call
 
@@ -61,11 +63,12 @@ loads.
 option. Wrap it:
 
 ```ts
-export const timedFetch = (ms = 8000) => (input: RequestInfo | URL, init?: RequestInit) =>
-  fetch(input, {
-    ...init,
-    signal: init?.signal ? AbortSignal.any([init.signal, AbortSignal.timeout(ms)]) : AbortSignal.timeout(ms),
-  });
+export const timedFetch = (ms = 8000) => (input: RequestInfo | URL, init?: RequestInit) => {
+  // Keep any cancellation the caller already has, from init or from a Request, and add the deadline.
+  const caller = init && "signal" in init ? init.signal : input instanceof Request ? input.signal : undefined;
+  const deadline = AbortSignal.timeout(ms);
+  return fetch(input, { ...init, signal: caller ? AbortSignal.any([caller, deadline]) : deadline });
+};
 createClient({ url, authToken, fetch: timedFetch() });
 ```
 
