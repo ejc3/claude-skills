@@ -31,6 +31,11 @@ description: Using the owner's Mac from a remote agent session - builds, app aut
 - Your own window, kept by id: `set wid to id of (make new window with properties {mode:"normal"})`, then
   `tell window id wid`. Never touch the owner's tabs; never match tabs by URL alone.
 - Check the page's signed-in state; a new window inherits the front window's profile.
+- A sign-in chooser (Google's account list, a Cloudflare Access login) can hold several people's accounts. Click the
+  owner's account by its identifier (`[data-identifier="<owner's address>"]`), never the first entry: a script that
+  took the first one tried another person's account twice.
+- Before a check, record any per-site setting you might change (a saved mode in `localStorage`), and put it back
+  exactly before closing your window.
 - Wrap every call in `with timeout of N seconds`. Wait 8-10 s after a saving click before closing.
 - JavaScript timing out (`-1712`) in every window of a profile needs a Chrome relaunch: ask the owner.
 - Click through setups the owner asked for. The owner signs in and approves 2FA. Never pay or accept a contract.
@@ -39,6 +44,14 @@ description: Using the owner's Mac from a remote agent session - builds, app aut
 
 `peekaboo see --mode screen --no-elements --path /tmp/s.png`; for one window, `peekaboo window list --app
 PID:$(pgrep -x "Google Chrome") --json`, then `peekaboo see --window-id ID`.
+
+- Holding the lease, run Peekaboo as `MAC_LEASE=NAME peekaboo ...`: without it Peekaboo waits for the lease you hold,
+  and the command hangs.
+- Write the screenshot to `/private/tmp`, copy it off and delete it. The Mac's `$TMPDIR` may sit on a removable
+  volume that screen capture cannot write to, and the capture then fails with no file.
+- macOS has no `timeout` command; bound a remote call from the calling side (`timeout 120 ssh mac ...`).
+- Look at the load first (`uptime`, `ps -Ao pcpu,comm -r | head`): other sessions' simulators and VMs can hold the Mac
+  at a load of hundreds, which slows any page you judge there. Say so beside any timing taken on the Mac.
 
 ## Signing and long jobs
 
