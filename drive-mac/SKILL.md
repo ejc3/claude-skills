@@ -1,31 +1,42 @@
 ---
 name: drive-mac
-description: Using the owner's Mac from a remote agent session - builds, app automation (AppleScript, Chrome), screenshots and clicks (Peekaboo), signing, and sharing the Mac with other agent sessions - and setting up another Mac or a Windows PC the same way. Use whenever a task runs anything on the Mac, drives its screen or Chrome, signs or uploads an Apple build, answers a macOS permission prompt, or sets up a new Mac or Windows PC for remote use.
+description: Route macOS builds and tests to a shared Mac mini. Use for AppleScript or Chrome automation, Peekaboo screenshots and clicks, macOS permission prompts, Apple signing and uploads, or remote setup of another Mac or Windows PC.
 ---
 
-# Driving the owner's Mac
+# Using a Mac from a remote agent session
 
-**How to reach it** (the alias, the route) is machine-local: read `~/.claude/local.md` first. If it is missing, ask.
+Read `~/.claude/local.md` for this account's SSH route to each Mac. If it omits the machine you need, ask the owner.
 
-## What runs where
+## Choose where the task runs
 
-- **Plain session:** builds, scripts, files, the scratch drive; `osascript` to System Events and Chrome; `peekaboo`.
-- **`mac-gui [--timeout S] -- CMD`:** anything needing the login keychain (`codesign`, signed `xcodebuild archive` /
-  `-exportArchive`, `security`). A plain session gets `errSecInternalComponent`.
+- **Mac mini host.** Use the shared physical mini by default for builds, scripts and tests its macOS toolchain supports. Open its normal
+  SSH login from the dev box. Give each task a fresh directory. On the mini run
+  `(umask 077; mkdir -p "$HOME/agent-work" && mktemp -d "$HOME/agent-work/task.XXXXXXXX")` and keep the printed path.
+  Transfer the exact revision and intended edits from the dev box. Keep keys there. Put outputs under the task
+  directory, including Xcode builds with `-derivedDataPath <task-dir>/DerivedData`. Copy results back and remove
+  only the directory you created. The mini shares memory with VMs. Use its `mac-build` slots for heavy jobs.
+  The installed Swift and Xcode build shims take a slot automatically.
+- **Project CI.** Use the project's existing Xcode workflow for releases, signing and TestFlight. If `xcodebuild -showsdks`
+  or the required toolchain fails on the mini, use the project's CI for iOS, simulator and Swift Testing (`@Test`)
+  jobs. The Command Line Tools may still build ordinary Swift packages. TestFlight uploads use App Store Connect
+  API credentials.
+- **Owner's laptop.** Use it for tasks that need its attached device, signed-in desktop browser or login keychain.
 
-## Sharing the Mac
+## Sharing the owner's laptop
+
+In a plain laptop SSH session, `osascript` can drive System Events and Chrome, and `peekaboo` can drive the desktop.
 
 - **`mac-lease`** before driving the screen or relaunching an app: `mac-lease run NAME -- CMD`, or `take NAME` /
   `release NAME`. `peekaboo` waits while another session holds it (`MAC_LEASE=NAME`).
 - **`mac-build`**: at most two heavy builds; `swift`, `xcodebuild`, `xcrun` already go through it.
 
-## Permission prompts
+### Permission prompts
 
 - Click **Allow** on prompts your own work triggers (Automation, Accessibility, Screen Recording, Full Disk Access,
   keychain for signing). Anything asking for Touch ID or a password goes to the owner.
 - Never answer another app's dialog (its password prompt, sign-in, Time Machine). Screenshot it and report.
 
-## Chrome (the owner's signed-in browser)
+### Chrome (the owner's signed-in browser)
 
 - Take the lease; never relaunch Chrome while another session is mid-flow (it can sign the owner out).
 - Your own window, kept by id: `set wid to id of (make new window with properties {mode:"normal"})`, then
@@ -40,7 +51,7 @@ description: Using the owner's Mac from a remote agent session - builds, app aut
 - JavaScript timing out (`-1712`) in every window of a profile needs a Chrome relaunch: ask the owner.
 - Click through setups the owner asked for. The owner signs in and approves 2FA. Never pay or accept a contract.
 
-## Peekaboo
+### Peekaboo
 
 `peekaboo see --mode screen --no-elements --path /tmp/s.png`; for one window, `peekaboo window list --app
 PID:$(pgrep -x "Google Chrome") --json`, then `peekaboo see --window-id ID`.
@@ -53,11 +64,12 @@ PID:$(pgrep -x "Google Chrome") --json`, then `peekaboo see --window-id ID`.
 - Look at the load first (`uptime`, `ps -Ao pcpu,comm -r | head`): other sessions' simulators and VMs can hold the Mac
   at a load of hundreds, which slows any page you judge there. Say so beside any timing taken on the Mac.
 
-## Signing and long jobs
+### Signing and long jobs
 
-Build in a plain session; run only the signing step through `mac-gui`. A job that must outlive the connection (an
-upload) runs as a one-off LaunchAgent in `gui/$(id -u)` (`RunAtLoad`, no `KeepAlive`, log to a file, bootout after).
-TestFlight goes through the App Store Connect API key, not Chrome. In a script fed on stdin, give inner `ssh` `-n`.
+If a task needs the laptop's signing identity, build in a plain session and run the signing step through
+`mac-gui [--timeout S] -- CMD` to reach its login keychain. Plain SSH can return `errSecInternalComponent`. A job
+that must outlive the desktop connection can run as a one-off LaunchAgent in `gui/$(id -u)` (`RunAtLoad`, no `KeepAlive`,
+log to a file, bootout after). In a script fed on stdin, give inner `ssh` `-n`.
 
 ## Setting up another Mac the same way
 
