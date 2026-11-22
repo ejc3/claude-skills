@@ -137,6 +137,34 @@ Work out the emergency path before you need it:
 - **The deploy credential** should stay where it is (an environment that admits only main). Don't
   try to deploy from a laptop with a copied token.
 
+## 6. Scheduled work that keeps what it found
+
+A Worker that checks something on a schedule (prices, stock, an upstream's health) and serves
+the latest result:
+
+- **Store:** a SQLite-backed Durable Object (`migrations: [{ tag, new_sqlite_classes }]` in
+  wrangler.jsonc) needs no account resource of its own, so a deploy token limited to
+  Workers Scripts can ship it. KV needs a namespace created and a token that can write it, which
+  a narrowly scoped CI deploy token often cannot. Keep every reading with its time, cap how long
+  rows live, and serve the newest reading per item, so one failed run keeps the last good one.
+- **Schedule:** `triggers.crons` plus a `scheduled(controller, env, ctx)` handler that hands its
+  promise to `ctx.waitUntil`. Vary the work by `controller.scheduledTime` (a costly source once a
+  day, the cheap ones every run) rather than declaring several crons.
+- **WebAssembly in the Worker:** import the `.wasm` file; Wrangler bundles it as a compiled
+  `WebAssembly.Module`. Workers cannot compile at run time, and `@cloudflare/workers-types` leaves
+  `WebAssembly.compile` out, so shared code that compiles bytes elsewhere must accept a Module and
+  reach `compile` only for bytes. Add `declare module '*.wasm'` for the type checker.
+- **A browser from the Worker:** a hosted browser's DevTools socket can be driven with the
+  standard `WebSocket` and plain CDP messages; the same module then runs in Node for a manual run.
+- **Test the schedule locally without a port:** load the bundle from `wrangler deploy --dry-run
+  --outdir <dir>` into Miniflare with `port: 0`, the Durable Object binding (`useSQLite: true`) and
+  secrets passed in memory, call `(await mf.getWorker()).scheduled({ scheduledTime, cron })`, then
+  `mf.dispatchFetch` the read route. Empty the out dir between builds (old `.wasm` files stay), and
+  remember `dispatchFetch` and `scheduled` give up after about five minutes of silence, so test
+  long runs in pieces.
+- **Off until configured:** without its secrets the job logs that it is off and returns, and the
+  health route says why.
+
 ## References
 
 - Cloudflare: Workers runtime, "Cannot perform I/O on behalf of a different request"
@@ -144,4 +172,7 @@ Work out the emergency path before you need it:
 - Cloudflare: Workers Logs and the Query API (https://developers.cloudflare.com/workers/observability/logs/workers-logs/)
 - Cloudflare: 5xx errors from Cloudflare (520, 525) (https://developers.cloudflare.com/support/troubleshooting/http-status-codes/cloudflare-5xx-errors/)
 - libSQL TypeScript client (`@libsql/client`), config `fetch` option (https://github.com/tursodatabase/libsql-client-ts)
+- Cloudflare: Durable Objects with SQLite storage (https://developers.cloudflare.com/durable-objects/api/sql-storage/)
+- Cloudflare: Cron Triggers (https://developers.cloudflare.com/workers/configuration/cron-triggers/)
+- Miniflare API (https://developers.cloudflare.com/workers/testing/miniflare/)
 - `SKILL.md` beside this file, for moving a site onto Workers in the first place.
