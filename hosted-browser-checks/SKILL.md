@@ -54,9 +54,16 @@ tests:
   the store's buy-box elements (Amazon: `#corePrice_feature_div .a-offscreen`, `#availability`,
   `#mir-layout-DELIVERY_BLOCK`), and read those before falling back to the page text.
 - **Words to look for:** "In Stock", "Only N left in stock", "Currently unavailable",
-  "N NEW IN STOCK at <store>", "SOLD OUT at <store>", "FASTEST DELIVERY <MON>, <D>", the first
-  non-zero price (the sale price when two are shown). Turn delivery dates into days from today,
-  taking the soonest when a page offers two (standard and members).
+  "N NEW IN STOCK at <store>", "SOLD OUT at <store>", "FASTEST DELIVERY <MON>, <D>".
+- **The price the store charges, not the first one printed.** Pages order prices differently:
+  a regular price struck through before the sale price, a "List:" or "Was:" price, a per-unit
+  price, a price for another quantity. Read the buy box's own price element first (Amazon's
+  first `.a-offscreen` inside `#corePrice_feature_div`). In text, skip lines marked as list,
+  was, regular, typical or per-unit prices, and save a real page with a sale in the tests.
+- **The delivery everyone gets.** Turn the standard delivery date into days from today. A
+  date only members get ("Or Prime members get FREE delivery ...") or an alternative ("Or
+  fastest delivery ...") promises nothing to someone without it, and a deadline planned on it
+  is missed: cut a delivery line at its "Or" and skip a members-only line.
 - **Refuse what you cannot read.** A page with neither a price nor a stock word (a robot check,
   a moved page) is refused, and the last good reading stands.
 - **Tests replay real pages.** Save the visible text of each store's page once, cut to the
