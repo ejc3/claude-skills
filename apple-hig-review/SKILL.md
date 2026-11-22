@@ -27,6 +27,16 @@ Reviewers judge pixels, not just code. Before briefing anyone, capture the real 
   or XcodeGen keys, entitlements), and the deployment targets. A reviewer's API
   recommendation is useless if it needs a newer OS than the app targets without an
   `#available` check.
+- **Every screen, from a seeded build:** a capture walk that taps through the app misses
+  states and drifts with the UI. Instead let Debug builds read a stored project (and any photo)
+  from the launch environment before the app starts, and write a throwaway XCUITest that, for
+  each screen, launches on a seed already at that screen, screenshots it, then swipes up and
+  screenshots each scroll position (`XCTAttachment`, `lifetime = .keepAlways`). Run it once per
+  variant (iPhone light, dark, accessibility large; iPad), export with `xcrun xcresulttool
+  export attachments`, name the files `<device>-<appearance>-<screen>-<n>.png`, and drop
+  repeated shots by hash where a screen is too short to scroll. A failing test exports its own
+  attachments too ("UI Snapshot", "Synthesized Event"): delete them. iPad puts the tab bar at
+  the top, so `app.tabBars` finds nothing there.
 - **The comparable Apple app:** name it (Safari for a browser, Mail, Files, Settings).
   Reviewers compare against how it behaves on the release in question.
 
@@ -48,7 +58,28 @@ overlap. For an app with a custom feature on top of standard chrome, a good spli
 Run them in parallel against one frozen tree, and wait for all of them before acting. A
 reviewer must not edit files.
 
+### A second, unanchored model
+
+Add one reviewer on a different model (when the owner asks for one, or for a redesign) with
+none of the other reviewers' conclusions. Give it the screenshots, the app paragraph and the
+lens, and ask for: what the app is really for and whether the design serves it, the one big
+reframing idea with a sketch, its top five changes concrete enough to build, and the one thing
+everyone will be tempted to do that would be a mistake. When it reaches the same reframe as the
+area reviewers independently, that is the strongest signal the review produces.
+
 ## 3. The brief
+
+Write the shared part once, to a file every reviewer reads first (the app, the lens, the
+architecture rule for where fixes go, the screenshot index and naming, known issues not to
+"discover", the deliverable), and keep each reviewer's prompt to its area, files and report path.
+
+When the owner asks for world class rather than compliance ("how would Jony Ive design this"),
+say so in the lens: inevitability, reduction, deference (the person's content is the hero),
+one obvious next action per screen, typography and layout doing what boxes and color do now,
+honest materials (no glass in the content layer), and care in empty and error states. Ask each
+reviewer for **the screen as it should be**, with an ASCII sketch at phone width, before the
+findings, and to name the Apple apps that solve the same problem best. Keep the rule that a
+must-fix cites a source; taste is labelled judgment.
 
 Each reviewer gets the same skeleton, filled in for its area:
 
@@ -169,6 +200,13 @@ If asked to fix:
   Motion stopping an animation and a label reaching VoiceOver are all testable with
   XCUITest.
 - **Gate newer APIs** with `if #available` and keep the older-OS path working.
+- **A structural redesign** (fewer screens, controls moved onto the content): write the new
+  view model as a contract file first (each screen's fields, which action is the one prominent
+  one, which state must survive a restart), change the shared core against it with tests, then
+  redraw each host against the contract, in parallel worktrees if there are several. Dump one
+  real view of each screen from the core's tests for the host work to build against.
+- **Defects a redesign does not remove** go in first or with it, each with a test: they are
+  usually data loss or a false statement (see Gotchas).
 
 ## Files
 
@@ -198,3 +236,23 @@ If asked to fix:
   `evaluateJavaScript` or `callAsyncJavaScript` can count as a user gesture, so an injected
   `focus()` may raise the iOS keyboard. `inputmode="none"` on the field suppresses it for
   fields you control; test on a device.
+- **Defects design reviews keep finding** (each needed a code fix, not a restyle):
+  - Progress said three times (a large title, "3 of 6", a row of step chips), and chips ticked
+    for steps never visited because "done" was derived from data, not from visits.
+  - A destructive replace (a new photo) that silently erased the work tied to the old one.
+    When the host keeps the new bytes before telling the app, a confirmation afterwards is too
+    late: ask before opening the picker, and let the picker open only from the answer.
+  - "Checked just now" that never ages, and "checked live for 0 items": derive the words from
+    the timestamp and the current time, and say plainly when a check read nothing.
+  - Floating glass controls that cover the content they act on at the default zoom; float
+    them only when the content can move out from under them.
+  - Many prominent buttons on one screen (one per vendor, one per item): give links a style
+    from the core, make exactly one primary, and remember which were followed.
+- **Accent color:** an `AccentColor` asset does nothing until the target sets
+  `ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME` (generated projects, e.g. XcodeGen, often
+  lack it). A lighter accent for dark mode needs a dark label on it; `.borderedProminent`
+  keeps white, so measure the contrast and use a button style with its own label color.
+- **Icon Composer (`.icon`)** compiles only with Xcode 26 or later; CI images that default to
+  an older Xcode fail with "None of the input catalogs contained a matching … app icon set".
+  Select the newest Xcode on the image, and fail loudly when none is new enough.
+
