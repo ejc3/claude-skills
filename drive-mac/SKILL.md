@@ -1,6 +1,6 @@
 ---
 name: drive-mac
-description: Route macOS builds and tests to a shared Mac mini. Use for AppleScript or Chrome automation, Peekaboo screenshots and clicks, macOS permission prompts, Apple signing and uploads, or remote setup of another Mac or Windows PC.
+description: Route macOS builds and tests to a shared Mac mini, and test on the real iPhones attached to it (TestFlight builds, universal links, sign-in sheets) instead of asking the owner. Use for AppleScript or Chrome automation, Peekaboo screenshots and clicks, macOS permission prompts, Apple signing and uploads, or remote setup of another Mac or Windows PC.
 ---
 
 # Using a Mac from a remote agent session
@@ -21,6 +21,37 @@ Read `~/.claude/local.md` for this account's SSH route to each Mac. If it omits 
   jobs. The Command Line Tools may still build ordinary Swift packages. TestFlight uploads use App Store Connect
   API credentials.
 - **Owner's laptop.** Use it for tasks that need its attached device, signed-in desktop browser or login keychain.
+
+## Testing on a real iPhone attached to the mini
+
+The mini may have iPhones on USB with Developer Mode on, signed in to the owner's account, with
+TestFlight. A check that needs a real device (a universal link tapped, a sign-in sheet, push, the
+camera) is yours to run on them. Never hand the owner a step an attached device can do.
+
+- **See what is attached:** `xcrun devicectl list devices` (rows marked `physical`). Pick the
+  device by its listed identifier for this run; never hardcode one.
+- **`devicectl device info apps` does not list App Store or TestFlight apps**, not even with
+  `--include-all-apps`: it shows system apps and developer-installed ones only. An app missing from
+  it proves nothing. Look at the phone (a screenshot from a UI test), or ask the owner once.
+- **Get the build on the phone the cheap way first.** If the project's CI uploads to TestFlight,
+  that build is what testers run: install it through the TestFlight app on the device (a UI test
+  can drive `XCUIApplication(bundleIdentifier: "com.apple.TestFlight")`). Build and sign a
+  development build only when no TestFlight build has the change.
+- **A development build without moving a key.** The App Store Connect API key stays on the box
+  that holds it. From that box: register the device if needed, find the Mac's development
+  certificate by its SHA-1 (`security find-identity -v -p codesigning` on the Mac), create an
+  `IOS_APP_DEVELOPMENT` profile for the app's bundle ID with that certificate and device, and send
+  only the profile (not a secret) to the Mac. A test runner needs a profile too; a wildcard App ID
+  (`*`) covers it. Point only the app's and the test target's signing at the profiles, in the
+  Mac's working copy, so the Pods targets keep theirs.
+- **Tap a link as a person would** with a UI test: `XCUIDevice.shared.system.open(url)` hands the
+  URL to the system, which resolves universal links (a link pasted into Safari does not). System
+  prompts ("wants to use … to sign in", permission alerts) belong to
+  `XCUIApplication(bundleIdentifier: "com.apple.springboard")`. Keep screenshots with
+  `XCTAttachment(screenshot:)` and `lifetime = .keepAlways`, and export them from the result bundle.
+  Pass values to the test runner as `TEST_RUNNER_<NAME>` build settings.
+- **The toolchain lives on the mini already** when the machine's setup installed it (its
+  `~/AGENTS.md` says where). Read that file before building there.
 
 ## Sharing the owner's laptop
 
