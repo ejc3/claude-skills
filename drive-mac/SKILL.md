@@ -51,6 +51,35 @@ In a plain laptop SSH session, `osascript` can drive System Events and Chrome, a
 - JavaScript timing out (`-1712`) in every window of a profile needs a Chrome relaunch: ask the owner.
 - Click through setups the owner asked for. The owner signs in and approves 2FA. Never pay or accept a contract.
 
+### Web consoles with no API (App Store Connect, account settings)
+
+When a service's API refuses an operation, its web console in the owner's signed-in Chrome usually does it. For
+example, App Store Connect's API will not create an app record (`"The resource 'apps' does not allow 'CREATE'"`).
+Do the step this way, don't hand it to the owner. Do everything the API allows through the API first: register the
+bundle id, so the console's menu offers it.
+
+1. **Open your own window on the console's page** and check it shows the owner signed in (a screenshot).
+2. **Run JavaScript from a file, not inline.** Quoting JavaScript through `ssh`, `osascript -e` and AppleScript
+   strings breaks.
+   - Copy the script and a small runner to `/private/tmp`.
+   - Run it with `osascript run-js.applescript /private/tmp/step.js <window id>`.
+   - The runner reads the file (`read (POSIX file p) as «class utf8»`) and does
+     `tell active tab of window id wid to execute javascript js`, inside `with timeout`.
+   - Delete both files afterwards.
+3. **Set a React form field with the native setter, then fire events.** A plain `.value = ...` is discarded:
+   `Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(el, v)` (or
+   `HTMLSelectElement.prototype` for a select), then dispatch `input` and `change` with `{ bubbles: true }`.
+   - Click checkboxes and radios with `.click()`.
+   - Choose a select's option by its text (the value is an opaque id).
+4. **Before the button that commits, take a screenshot and read every field back.**
+5. **After the click, check the result through the API, not the page.** Then read the page for validation errors.
+   - A name can be taken globally (App Store names are unique across all developers).
+   - Pick the next name by the account's own convention (its other apps' names), and say so.
+6. **Close your window and release the lease.**
+
+The owner's part stays the owner's: if the console asks for a password, 2FA, payment or new terms, stop and hand over
+that one action.
+
 ### Peekaboo
 
 `peekaboo see --mode screen --no-elements --path /tmp/s.png`; for one window, `peekaboo window list --app
