@@ -44,14 +44,20 @@ camera) is yours to run on them. Never hand the owner a step an attached device 
   only the profile (not a secret) to the Mac. A test runner needs a profile too; a wildcard App ID
   (`*`) covers it. Point only the app's and the test target's signing at the profiles, in the
   Mac's working copy, so the Pods targets keep theirs.
-- **A locked phone refuses every launch** ("Unable to launch … because the device is locked"), and
-  only the owner can unlock it: a test phone should have Auto-Lock off. If it is locked, say so once
-  and stop.
-- **Tap a link as a person would** with a UI test: `XCUIDevice.shared.system.open(url)` hands the
-  URL to the system, which resolves universal links (a link pasted into Safari does not). System
-  prompts ("wants to use … to sign in", permission alerts) belong to
-  `XCUIApplication(bundleIdentifier: "com.apple.springboard")`. Keep screenshots with
-  `XCTAttachment(screenshot:)` and `lifetime = .keepAlways`, and export them from the result bundle.
+- **A locked phone refuses every launch** ("Unable to launch … because the device is locked"). Wake
+  it as below when no passcode is asked for; only a phone that wants its passcode needs the owner, and
+  then say so once and stop.
+- **Open a link in the app** with a UI test: `XCUIApplication(bundleIdentifier:).open(url)` hands it
+  to the app as iOS does once it has resolved a universal link, so it drives the app's own routing.
+  `XCUIDevice.shared.system.open(url)` is not a tap: it opens an `https` URL in the default browser,
+  never through universal links. Whether iOS routes the domain to the app rests on the signed
+  entitlement (`codesign -d --entitlements -`) and the association file Apple's CDN serves
+  (`https://app-site-association.cdn-apple.com/a/v1/<domain>`); a real tap needs a link in another
+  app. A sleeping phone with no passcode asked for (`devicectl device info lockState`) wakes with
+  `XCUIDevice.shared.press(.home)` and a swipe up on the springboard. System prompts ("wants to use …
+  to sign in", permission alerts) belong to `XCUIApplication(bundleIdentifier:
+  "com.apple.springboard")`; a sign-in sheet's page to `com.apple.SafariViewService`. Keep screenshots
+  with `XCTAttachment(screenshot:)` and `lifetime = .keepAlways`, and export them from the result bundle.
   Pass values to the test runner as `TEST_RUNNER_<NAME>` environment variables of the `xcodebuild`
   process (not build settings): the runner sees them as `<NAME>`.
 - **The toolchain lives on the mini already** when the machine's setup installed it (its
