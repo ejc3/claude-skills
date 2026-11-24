@@ -49,7 +49,8 @@ camera) is yours to run on them. Never hand the owner a step an attached device 
   prompts ("wants to use … to sign in", permission alerts) belong to
   `XCUIApplication(bundleIdentifier: "com.apple.springboard")`. Keep screenshots with
   `XCTAttachment(screenshot:)` and `lifetime = .keepAlways`, and export them from the result bundle.
-  Pass values to the test runner as `TEST_RUNNER_<NAME>` build settings.
+  Pass values to the test runner as `TEST_RUNNER_<NAME>` environment variables of the `xcodebuild`
+  process (not build settings): the runner sees them as `<NAME>`.
 - **The toolchain lives on the mini already** when the machine's setup installed it (its
   `~/AGENTS.md` says where). Read that file before building there.
 
